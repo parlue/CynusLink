@@ -2,48 +2,54 @@ Cynus ChessLink BLE Gateway
 
 An ESP32-S3 based Bluetooth Low Energy gateway that aims to make the Manya Cynus chess robot compatible with software that supports the Millennium ChessLink BLE protocol.
 
-The gateway sits between the chess application and the Cynus robot and translates the two Bluetooth protocols in real time.
+Status: Experimental / Work in Progress
 
-Project status: Work in progress / experimental. Hardware and firmware are currently under development.
+Overview
 
-Idea
+The Manya Cynus uses its own Bluetooth Low Energy protocol. Many chess applications already support Millennium ChessLink compatible hardware.
 
-The Manya Cynus is a physical chess robot with its own Bluetooth Low Energy protocol. Many chess applications, however, already support Millennium ChessLink compatible electronic chess boards.
+This project uses an ESP32-S3 as a Bluetooth-to-Bluetooth protocol gateway.
 
-Instead of modifying the chess application, this project uses an ESP32-S3 as a Bluetooth-to-Bluetooth protocol gateway.
+The ESP32-S3 acts as:
 
-From the application's point of view, the ESP32 behaves like a ChessLink-compatible device. At the same time, the ESP32 connects to the Cynus as a BLE client and translates commands, board states and moves between both protocols.
+a BLE Peripheral / GATT Server toward the chess application
 
-+--------------------+
-| Chess Application  |
-| ChessLink Support  |
-+---------+----------+
-          |
-          | Bluetooth LE
-          | ChessLink Protocol
-          v
-+----------------------------+
-|          ESP32-S3          |
-|                            |
-|  ChessLink BLE Peripheral  |
-|            |               |
-|     Protocol Gateway       |
-|            |               |
-|     Cynus BLE Client       |
-+-------------+--------------+
+a BLE Central / GATT Client toward the Manya Cynus
+
+a protocol translator between ChessLink and Cynus
+
+Architecture
+
++---------------------------+
+| Chess Application         |
+| ChessLink BLE Support     |
++-------------+-------------+
+              |
+              | Bluetooth LE
+              | ChessLink Protocol
+              |
+              v
++---------------------------+
+| ESP32-S3 Gateway          |
+|                           |
+| ChessLink BLE Peripheral  |
+|            |              |
+| Protocol Translation      |
+|            |              |
+| Cynus BLE Client          |
++-------------+-------------+
               |
               | Bluetooth LE
               | Cynus Protocol
+              |
               v
-+----------------------------+
-|     Manya Cynus Robot      |
-+----------------------------+
++---------------------------+
+| Manya Cynus Chess Robot   |
++---------------------------+
 
-No wired data connection between the computer and robot is required. The ESP32 only needs a USB power supply.
+The ESP32-S3 only requires USB power. No wired data connection between the computer and the robot is required.
 
-Goals
-
-The main goals of the project are:
+Project Goals
 
 Make the Manya Cynus usable with ChessLink-compatible chess software.
 
@@ -51,13 +57,13 @@ Use an inexpensive ESP32-S3 as a standalone gateway.
 
 Communicate wirelessly on both sides using Bluetooth Low Energy.
 
-Translate board positions and moves in real time.
+Translate board states and chess moves in real time.
 
-Allow computer moves to be executed physically by the Cynus robot.
+Allow moves from the chess application to be physically executed by the Cynus robot.
 
-Keep the solution independent from a specific PC operating system.
+Keep the solution independent from a specific desktop operating system.
 
-Provide a compact, screwless 3D-printed enclosure.
+Provide a compact screwless 3D-printed enclosure.
 
 Hardware
 
@@ -69,7 +75,7 @@ Purpose
 
 ESP32-S3 DevKitC-1 compatible board
 
-Runs the BLE gateway and protocol translation
+Runs the gateway firmware
 
 Manya Cynus
 
@@ -77,122 +83,177 @@ Physical chess robot
 
 USB-C cable
 
-Powers and programs the ESP32-S3
+Programming and power
 
 USB power supply
 
-Allows standalone operation
+Standalone power
 
 3D-printed enclosure
 
 Protects the ESP32-S3
 
-The current enclosure is designed around an ESP32-S3-WROOM-1 / DevKitC-1 style board.
+The current enclosure is designed around an ESP32-S3-WROOM-1 / ESP32-S3-DevKitC-1 style board.
 
 Why ESP32-S3?
 
-The ESP32-S3 is well suited to this project because it can operate as both:
+The ESP32-S3 can handle both required BLE roles at the same time.
 
-a BLE Peripheral / GATT Server toward the ChessLink-compatible application, and
+Chess Application
+        |
+        | BLE
+        v
++----------------------+
+| ESP32-S3             |
+|                      |
+| BLE Peripheral       |
+|        +             |
+| BLE Central          |
++----------+-----------+
+           |
+           | BLE
+           v
+     Manya Cynus
 
-a BLE Central / GATT Client toward the Manya Cynus.
-
-This allows a single microcontroller to bridge both Bluetooth connections.
+This makes it possible to bridge both Bluetooth connections using a single microcontroller.
 
 How It Works
 
-The ESP32-S3 has two logical Bluetooth roles.
+ChessLink Side
 
-1. ChessLink Side
+Toward the computer, tablet or phone, the ESP32-S3 presents itself as a ChessLink-compatible BLE device.
 
-Toward the computer, tablet or phone, the ESP32 presents itself as a ChessLink-compatible BLE device.
+The chess application communicates with the gateway as if it were connected to supported ChessLink hardware.
 
-The chess application can therefore communicate with the gateway as if it were talking to supported ChessLink hardware.
+The gateway is intended to handle commands such as:
 
-The gateway handles commands such as:
+board status requests
 
-board status requests,
+version requests
 
-version requests,
+LED or move indication commands
 
-LED/move indications,
+display clearing commands
 
-display clearing,
+additional compatibility commands where required
 
-and other ChessLink messages required by the application.
+Cynus Side
 
-2. Cynus Side
+At the same time, the ESP32-S3 connects to the Manya Cynus as a BLE client.
 
-At the same time, the ESP32 connects to the Manya Cynus using the robot's BLE interface.
+The Cynus protocol can provide the current board position and can accept commands that cause the robot to execute chess moves.
 
-The Cynus protocol can provide information such as the current board position and can accept commands to physically execute moves.
-
-Conceptually, commands look like:
+Example commands are conceptually similar to:
 
 get fen
 scan board
 move e2e4
 
-The exact protocol handling is implemented by the Cynus communication layer.
+The exact protocol handling is implemented in the Cynus communication layer.
 
-3. Protocol Translation
+Protocol Translation
 
-The gateway maintains an internal representation of the chess board.
+Cynus to ChessLink
 
-For example, when the ChessLink side requests the current board state:
+When the chess application requests the current board state, the gateway obtains or uses the latest Cynus board position and converts it into the format expected by ChessLink.
 
 ChessLink board request
         |
         v
-ESP32 Gateway
-        |
-        +--> obtain/update Cynus position
-        |
-        +--> parse FEN
-        |
-        +--> convert to ChessLink board representation
+ESP32-S3 Gateway
         |
         v
-ChessLink response
+Read current Cynus position
+        |
+        v
+Parse FEN
+        |
+        v
+Convert board representation
+        |
+        v
+Create ChessLink response
+        |
+        v
+Chess Application
 
-The reverse direction is used for moves generated by the chess application:
+ChessLink to Cynus
 
-Chess application
-       |
-       | ChessLink move / LED information
-       v
-ESP32 Gateway
-       |
-       | determine source and destination squares
-       v
-UCI move
-e.g. e7e5
-       |
-       | Cynus BLE command
-       v
-Manya Cynus
-       |
-       v
-Robot physically executes the move
+When the chess application indicates a move, the gateway determines the source and destination squares and converts the move into UCI notation.
+
+Chess Application
+        |
+        v
+ChessLink move indication
+        |
+        v
+ESP32-S3 Gateway
+        |
+        v
+Determine source square
+        |
+        v
+Determine destination square
+        |
+        v
+Create UCI move
+        |
+        v
+Example: e7e5
+        |
+        v
+Send Cynus move command
+        |
+        v
+Manya Cynus executes move
+
+Internal Board State
+
+The gateway maintains an internal representation of the current chess position.
+
+This is useful for:
+
+detecting moves
+
+translating board states
+
+handling move indications
+
+validating source and destination squares
+
+processing castling
+
+processing en passant
+
+processing promotion
+
+recovering after temporary Bluetooth disconnects
 
 Firmware Architecture
 
-The firmware is intended to be separated into independent modules:
+The firmware is planned as a set of independent modules.
 
 src/
-├── main.cpp
-├── ble_chesslink_server.cpp
-├── ble_chesslink_server.h
-├── ble_cynus_client.cpp
-├── ble_cynus_client.h
-├── chesslink_protocol.cpp
-├── chesslink_protocol.h
-├── cynus_protocol.cpp
-├── cynus_protocol.h
-├── board_state.cpp
-├── board_state.h
-├── gateway.cpp
-└── gateway.h
+|
++-- main.cpp
+|
++-- ble_chesslink_server.cpp
++-- ble_chesslink_server.h
+|
++-- ble_cynus_client.cpp
++-- ble_cynus_client.h
+|
++-- chesslink_protocol.cpp
++-- chesslink_protocol.h
+|
++-- cynus_protocol.cpp
++-- cynus_protocol.h
+|
++-- board_state.cpp
++-- board_state.h
+|
++-- gateway.cpp
++-- gateway.h
 
 ble_chesslink_server
 
@@ -204,60 +265,108 @@ Scans for the Cynus, establishes the BLE connection and handles communication wi
 
 chesslink_protocol
 
-Parses and generates ChessLink protocol messages, including checksums and board-state messages.
+Parses and generates ChessLink protocol messages.
+
+This includes:
+
+command parsing
+
+response generation
+
+checksum handling
+
+board-state encoding
+
+move or LED command decoding
 
 cynus_protocol
 
-Handles Cynus commands, responses and notifications.
+Handles communication with the Manya Cynus.
+
+This includes:
+
+commands
+
+responses
+
+notifications
+
+FEN handling
+
+move execution
 
 board_state
 
-Maintains the current chess position and performs conversions between FEN, board coordinates and the representation required by ChessLink.
+Maintains the current chess position and converts between:
+
+FEN
+
+board coordinates
+
+internal square representation
+
+ChessLink board representation
+
+UCI moves
 
 gateway
 
-Connects both protocol implementations and decides how incoming commands are translated.
+Connects both protocol implementations and performs the actual protocol translation.
 
 Expected Startup Sequence
-
-A typical startup sequence is:
 
 1. ESP32-S3 boots
 2. BLE stack is initialized
 3. Gateway searches for the Manya Cynus
-4. ESP32 connects to the Cynus
+4. ESP32-S3 connects to the Cynus
 5. Cynus notifications are enabled
 6. External control mode is initialized
 7. Current board position is requested
-8. ESP32 starts the ChessLink-compatible BLE service
-9. Chess application connects to the ESP32
+8. ChessLink-compatible BLE service starts
+9. Chess application connects to the ESP32-S3
 10. Gateway begins translating messages
 
 3D-Printed Enclosure
 
-A custom enclosure is being developed specifically for the ESP32-S3 gateway.
+A custom enclosure is being developed for the ESP32-S3 gateway.
 
 Design goals:
 
-no screws,
+no screws
 
-two-piece snap-fit construction,
+two-piece snap-fit construction
 
-internal PCB supports,
+internal PCB supports
 
-access to the USB connectors,
+USB connector access
 
-ventilation openings,
+ventilation openings
 
-compact dimensions,
+compact dimensions
 
-printable on a standard FDM printer,
+suitable for standard FDM printers
 
-minimal or no support material.
+minimal or no support material
+
+Enclosure Structure
+
+ESP32-S3 Enclosure
+|
++-- Lid
+|   |
+|   +-- Snap-fit tabs
+|   +-- Ventilation openings
+|
++-- Base
+    |
+    +-- PCB supports
+    +-- Snap-fit sockets
+    +-- USB opening
+    +-- Ventilation openings
 
 The enclosure consists of a base and a snap-fit lid.
 
-PETG is recommended because the material is better suited to repeated flexing of snap-fit features, although PLA can also be used for prototypes.
+PETG is recommended because it tolerates repeated flexing of snap-fit features better than many rigid PLA formulations.
 
 Suggested starting print settings:
 
@@ -280,7 +389,7 @@ Arduino framework or ESP-IDF
 
 NimBLE
 
-NimBLE is preferred for the BLE implementation because the ESP32 must maintain both client and peripheral functionality.
+NimBLE is preferred because the ESP32-S3 must maintain both BLE client and BLE peripheral functionality.
 
 Development Roadmap
 
@@ -302,7 +411,7 @@ Implement ChessLink board-status command
 
 Convert Cynus FEN to ChessLink board state
 
-Decode ChessLink move/LED commands
+Decode ChessLink move / LED commands
 
 Translate moves to UCI notation
 
@@ -314,7 +423,7 @@ Handle en passant
 
 Handle promotion
 
-Automatic BLE reconnection
+Implement automatic BLE reconnection
 
 Test with real ChessLink-compatible applications
 
@@ -322,47 +431,80 @@ Finalize enclosure dimensions
 
 Release first usable firmware
 
-Project Scope
-
-This project is an independent interoperability experiment.
-
-It is not intended to reproduce the complete behavior of every Millennium device. The initial goal is to implement the subset of the ChessLink protocol required for practical play with the Manya Cynus.
-
-Additional ChessLink commands can be implemented as compatibility requirements become known during testing.
-
 Repository Structure
 
-A possible repository layout is:
-
 Cynus-ChessLink-Gateway/
-├── README.md
-├── LICENSE
-├── platformio.ini
-├── src/
-├── include/
-├── docs/
-│   ├── protocol/
-│   └── images/
-└── hardware/
-    ├── stl/
-    └── openscad/
+|
++-- README.md
++-- LICENSE
++-- platformio.ini
+|
++-- src/
+|   |
+|   +-- main.cpp
+|   +-- ble_chesslink_server.cpp
+|   +-- ble_cynus_client.cpp
+|   +-- chesslink_protocol.cpp
+|   +-- cynus_protocol.cpp
+|   +-- board_state.cpp
+|   +-- gateway.cpp
+|
++-- include/
+|
++-- docs/
+|   |
+|   +-- protocol/
+|   +-- images/
+|
++-- hardware/
+    |
+    +-- stl/
+    +-- openscad/
+
+Project Scope
+
+This is an independent interoperability project.
+
+The goal is not necessarily to reproduce every function of every Millennium ChessLink-compatible device.
+
+The initial target is to implement the subset of the ChessLink protocol required for practical use with the Manya Cynus.
+
+Additional protocol commands can be added as compatibility requirements become known during testing.
+
+Contributing
+
+The project is currently in an early development stage.
+
+Contributions are welcome, especially:
+
+protocol observations
+
+BLE traces
+
+compatibility reports
+
+firmware improvements
+
+testing with different chess applications
+
+enclosure improvements
+
+documentation
 
 Disclaimer
 
 This is an unofficial community project and is not affiliated with, endorsed by, or sponsored by Manya or Millennium.
 
-Product and protocol names are used only to describe interoperability with the respective hardware.
+Product names and protocol names are used only to describe interoperability with the respective hardware.
 
 Use the firmware and hardware designs at your own risk.
 
-Contributing
-
-The project is in an early development stage. Testing, protocol observations, compatibility reports and code contributions are welcome.
-
-In particular, reports from different ChessLink-compatible applications will help determine which parts of the protocol need to be implemented or emulated.
-
 License
 
-A license has not yet been selected.
+A final license has not yet been selected.
 
-For an open-source hardware and firmware project, a permissive license such as MIT or Apache-2.0 can be used for the firmware, while the enclosure files may optionally use a Creative Commons license.
+A possible setup is:
+
+Firmware: MIT or Apache-2.0
+
+3D models: Creative Commons license
