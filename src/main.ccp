@@ -104,6 +104,19 @@ static bool publishNextFenToChessLink = false;
 static String bufferedFen = "";
 
 // --------------------
+// Comfort / UI layer
+// --------------------
+
+static bool displayPlayPending = false;
+static uint32_t displayPlayAt = 0;
+
+static constexpr const char* SOUND_OFF_FEN =
+    "rnbq1bnr/pppppppp/8/4k3/8/8/PPPPPPPP/RNBQKBNR";
+
+static constexpr const char* SOUND_ON_FEN =
+    "rnbq1bnr/pppppppp/4k3/8/8/8/PPPPPPPP/RNBQKBNR";
+
+// --------------------
 // ChessLink EEPROM emulation
 // --------------------
 
@@ -117,6 +130,9 @@ static uint8_t led[81];
 static void startCynusScan();
 static bool connectCynus();
 static bool sendCynus(const char* s);
+static void cynusDisplay(const char* text);
+static void schedulePlayDisplay(uint32_t delayMs = 2000);
+static String engineMoveDisplayText(const String& uci);
 
 static void createChessLinkServer();
 static void warmupChessLinkAdvertising();
@@ -436,6 +452,11 @@ class ServerCB : public NimBLEServerCallbacks {
             info.getMTU()
         );
 
+        if (cynusReady) {
+            cynusDisplay("ready");
+            schedulePlayDisplay(2000);
+        }
+
         // Ask for a larger MTU. The client may accept a smaller value.
         if (clServer) {
             clServer->updateConnParams(
@@ -497,6 +518,8 @@ class ServerCB : public NimBLEServerCallbacks {
         );
 
         if (cynusReady) {
+            displayPlayPending = false;
+            cynusDisplay("search");
             setState(WAIT_CHESSLINK);
             startChessLinkAdvertising();
         } else {
@@ -861,6 +884,14 @@ static void handleCL(const String& f) {
                     uci.c_str()
                 );
 
+                // UI only: show the move received from ChessLink.
+                // This does not modify the UCI move or the gateway state.
+                String displayMove = engineMoveDisplayText(uci);
+                if (displayMove.length()) {
+                    displayPlayPending = false;
+                    cynusDisplay(displayMove.c_str());
+                }
+
                 if (!cynusWaitingForMove) {
                     Serial.println(
                         "[GATEWAY] move ignored: Cynus did not request an external move"
@@ -1084,6 +1115,10 @@ static void cynusBytes(
                         "[MOVE] robot move complete; refreshing internal board only"
                     );
 
+                    // UI only: robot move is finished, return to normal play status.
+                    displayPlayPending = false;
+                    cynusDisplay("play");
+
                     sendCynus("get fen\n");
                 } else {
                     Serial.println(
@@ -1105,6 +1140,48 @@ static void cynusBytes(
                         "[BOARD] buffered FEN %s\n",
                         bufferedFen.c_str()
                     );
+
+                    // --------------------------------------------------------
+                    // CONFIGURATION POSITIONS
+                    // --------------------------------------------------------
+                    String configPlacement = bufferedFen;
+                    int configSpace = configPlacement.indexOf(' ');
+
+                    if (configSpace >= 0) {
+                        configPlacement = configPlacement.substring(0, configSpace);
+                    }
+
+                    if (
+                        state == RUNNING &&
+                        clConnected &&
+                        configPlacement == SOUND_OFF_FEN
+                    ) {
+                        Serial.println("[CONFIG] sound OFF position detected");
+                        publishNextFenToChessLink = false;
+
+                        if (sendCynus("sound 0\n")) {
+                            cynusDisplay("snd off");
+                            schedulePlayDisplay(2000);
+                        }
+
+                        continue;
+                    }
+
+                    if (
+                        state == RUNNING &&
+                        clConnected &&
+                        configPlacement == SOUND_ON_FEN
+                    ) {
+                        Serial.println("[CONFIG] sound ON position detected");
+                        publishNextFenToChessLink = false;
+
+                        if (sendCynus("sound 70\n")) {
+                            cynusDisplay("snd on");
+                            schedulePlayDisplay(2000);
+                        }
+
+                        continue;
+                    }
 
                     // --------------------------------------------------------
                     // NEW GAME / BOARD RESET
@@ -1159,6 +1236,9 @@ static void cynusBytes(
                                 "[NEW GAME] ChessLink notify not enabled; board stored for next S request"
                             );
                         }
+
+                        displayPlayPending = false;
+                        cynusDisplay("play");
 
                         continue;
                     }
@@ -1309,6 +1389,7 @@ class CClientCB : public NimBLEClientCallbacks {
         cynusExternalModeConfirmed = false;
         cynusEngineOffSecondSendPending = false;
         chessAdvertisingPendingAfterEngineOff = false;
+        displayPlayPending = false;
 
         Serial.printf(
             "[CYNUS] disconnected %d\n",
@@ -1434,6 +1515,74 @@ static bool sendCynus(const char* s) {
     return false;
 }
 
+
+static void cynusDisplay(const char* text) {
+    if (!cynusReady || !cynusChr || !text) {
+        return;
+    }
+
+    String msg = text;
+
+    if (msg.length() > 7) {
+        msg = msg.substring(0, 7);
+    }
+
+    String cmd = "display txt ";
+    cmd += msg;
+    cmd += "\n";
+
+    if (sendCynus(cmd.c_str())) {
+        Serial.printf("[DISPLAY] %s\n", msg.c_str());
+    } else {
+        Serial.printf("[DISPLAY] failed: %s\n", msg.c_str());
+    }
+}
+
+static void schedulePlayDisplay(uint32_t delayMs) {
+    displayPlayPending = true;
+    displayPlayAt = millis() + delayMs;
+}
+
+static String engineMoveDisplayText(const String& uci) {
+    // UI-only formatting. The UCI move itself is not changed.
+    if (uci == "e1g1" || uci == "e8g8") {
+        return "0-0";
+    }
+
+    if (uci == "e1c1" || uci == "e8c8") {
+        return "0-0-0";
+    }
+
+    // UCI promotion moves have a fifth character: q, r, b or n.
+    if (uci.length() >= 5) {
+        char promo = (char)toupper((unsigned char)uci[4]);
+
+        if (
+            promo == 'Q' ||
+            promo == 'R' ||
+            promo == 'B' ||
+            promo == 'N'
+        ) {
+            String s = "Chg ";
+            s += promo;
+            return s;
+        }
+    }
+
+    // Normal move, e.g. e2e4 -> E2-E4.
+    if (uci.length() >= 4) {
+        String s;
+        s += (char)toupper((unsigned char)uci[0]);
+        s += uci[1];
+        s += '-';
+        s += (char)toupper((unsigned char)uci[2]);
+        s += uci[3];
+        return s;
+    }
+
+    return "";
+}
+
 static bool connectCynus() {
     if (!cynusDev) {
         return false;
@@ -1489,6 +1638,8 @@ static bool connectCynus() {
         cynusDev->getName().c_str()
     );
 
+    cynusDisplay("search");
+
     // Before exposing ChessLink, force Cynus into external-engine mode.
     // Send the command once now and a second time after a short delay.
     cynusExternalModeConfirmed = false;
@@ -1539,7 +1690,7 @@ void setup() {
 
     Serial.println();
     Serial.println(
-        "=== CynusLink New-Game Reset build ==="
+        "=== CynusLink UI + Sound + Move Display build ==="
     );
 
     memset(ee, 0, sizeof(ee));
@@ -1629,6 +1780,16 @@ void loop() {
         );
 
         startChessLinkAdvertising();
+    }
+
+    if (
+        displayPlayPending &&
+        cynusReady &&
+        clConnected &&
+        (int32_t)(millis() - displayPlayAt) >= 0
+    ) {
+        displayPlayPending = false;
+        cynusDisplay("play");
     }
 
     // Debug only:
