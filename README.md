@@ -19,37 +19,51 @@ ChessLink-compatible device.
 
 ## Options
 
-CynusLink supports simple configuration directly from the chessboard.  
-No additional buttons, software or configuration menu are required.
+## Display Options
 
-Set up the desired position on the Cynus board and press the **Scan** button.
+CynusLink uses the Cynus display to provide simple status information without affecting the normal game logic.
 
-### Sound
+### Connection Status
 
-Starting from the normal initial chess position:
-
-| Black King | Function |
-| --- | --- |
-| **e5** | Sound OFF (`sound 0`) |
-| **e6** | Sound ON (`sound 70`) |
-
-After the position is scanned, CynusLink applies the setting and briefly shows the result on the Cynus display.
-
-- `snd off` — Sound disabled
-- `snd on` — Sound enabled
-- `play` — Ready to continue
-
-These special configuration positions are handled internally by CynusLink and are **not sent to the connected ChessLink software**.
-
-### Display Status
-
-The Cynus display also shows the current connection status:
-
-| Display | Status |
+| Display | Meaning |
 | --- | --- |
 | `search` | Cynus connected, waiting for ChessLink |
 | `ready` | ChessLink connected |
-| `play` | CynusLink ready to play |
+| `play` | CynusLink is ready to play |
+
+After ChessLink connects, `ready` is displayed briefly and automatically changes to `play`.
+
+### Engine Moves
+
+Moves received from the ChessLink application are shown on the Cynus display while the robot executes them.
+
+| Display | Meaning |
+| --- | --- |
+| `E2-E4` | Normal move |
+| `G1-F3` | Normal move |
+| `0-0` | Kingside castling |
+| `0-0-0` | Queenside castling |
+| `Chg Q` | Promote pawn to Queen |
+| `Chg R` | Promote pawn to Rook |
+| `Chg B` | Promote pawn to Bishop |
+| `Chg N` | Promote pawn to Knight |
+
+After the robot has completed the move, the display returns to `play`.
+
+### Sound Options
+
+Sound can be configured directly from the chessboard.
+
+Set up the normal starting position, move only the **black King**, and press the Cynus **Scan** button.
+
+| Black King | Function | Display |
+| --- | --- | --- |
+| `e5` | Sound OFF (`sound 0`) | `snd off` |
+| `e6` | Sound ON (`sound 70`) | `snd on` |
+
+After two seconds, the display automatically returns to `play`.
+
+These special configuration positions are handled internally by CynusLink and are **not sent to the connected ChessLink software**.
 
 ## Installation
 
