@@ -17,6 +17,40 @@ move commands between the Cynus and ChessLink protocols.
 To the chess application, the ESP32-S3 behaves like a
 ChessLink-compatible device.
 
+## Options
+
+CynusLink supports simple configuration directly from the chessboard.  
+No additional buttons, software or configuration menu are required.
+
+Set up the desired position on the Cynus board and press the **Scan** button.
+
+### Sound
+
+Starting from the normal initial chess position:
+
+| Black King | Function |
+| --- | --- |
+| **e5** | Sound OFF (`sound 0`) |
+| **e6** | Sound ON (`sound 70`) |
+
+After the position is scanned, CynusLink applies the setting and briefly shows the result on the Cynus display.
+
+- `snd off` — Sound disabled
+- `snd on` — Sound enabled
+- `play` — Ready to continue
+
+These special configuration positions are handled internally by CynusLink and are **not sent to the connected ChessLink software**.
+
+### Display Status
+
+The Cynus display also shows the current connection status:
+
+| Display | Status |
+| --- | --- |
+| `search` | Cynus connected, waiting for ChessLink |
+| `ready` | ChessLink connected |
+| `play` | CynusLink ready to play |
+
 ## Installation
 
 No development environment is required.
