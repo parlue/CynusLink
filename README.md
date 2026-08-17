@@ -89,14 +89,12 @@ CynusLink/
 +-- src/
 |   +-- main.cpp
 |
-+-- Firmware/
-|   +-- precompiled firmware files
-|
 +-- stl/
 |   +-- 3D print files
 |
 +-- docs/
     +-- CynusLink Web Installer
+    +-- precompiled firmware files
 ```
 
 ### `src`
