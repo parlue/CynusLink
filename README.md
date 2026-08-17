@@ -135,9 +135,25 @@ software and engine moves can be executed by the Cynus.
 
 Further testing and protocol compatibility improvements are ongoing.
 
-## Disclaimer
+## Trademark, Copyright and Protocol Notice
 
-CynusLink is an independent community project and is not affiliated with
-or endorsed by Manya or Millennium.
+CynusLink is an independent, unofficial interoperability project and is not
+affiliated with, endorsed by, or sponsored by MILLENNIUM 2000 GmbH.
+
+MILLENNIUM, ChessLink and related product names, trademarks, documentation
+and protocol specifications remain the property of their respective rights
+holders.
+
+This project does not claim ownership of the ChessLink protocol.
+ChessLink compatibility is implemented solely for the purpose of
+interoperability between independently developed hardware and compatible
+chess software.
+
+No original MILLENNIUM firmware, software, documentation or other
+copyrighted material is distributed with this project.
+
+Please respect the copyrights, trademarks and other intellectual property
+rights of MILLENNIUM 2000 GmbH and all other respective rights holders.
+
 
 Use at your own risk.
