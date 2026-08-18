@@ -437,7 +437,10 @@ static void sendCL(const String& payload) {
             ok ? "OK" : "FAILED"
         );
 
-        delay(8);
+        // Gerhard Kalab/python-mchess ChessLink transport is deliberately
+        // conservative between BLE writes. Give fragmented status frames
+        // enough time to be reassembled reliably by the client.
+        delay(40);
     }
 }
 
@@ -1836,7 +1839,7 @@ void setup() {
 
     Serial.println();
     Serial.println(
-        "=== CynusLink Robust Core Baseline v2.3 ==="
+        "=== CynusLink Robust Core Baseline v2.4 ==="
     );
 
     memset(ee, 0, sizeof(ee));
