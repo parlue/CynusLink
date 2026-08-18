@@ -1,4 +1,5 @@
 name: Apply v2.9 engine direction fix
+# trigger
 on:
   push:
     branches: [main]
@@ -17,150 +18,100 @@ jobs:
           from pathlib import Path
           p = Path('src/main.ccp')
           s = p.read_text(encoding='utf-8')
-
           anchor = 'static String correctionFenCandidate = "";\n'
           insert = '''static String correctionFenCandidate = "";\n\nenum EngineSide {\n    ENGINE_SIDE_UNKNOWN,\n    ENGINE_SIDE_WHITE,\n    ENGINE_SIDE_BLACK\n};\n\nstatic EngineSide engineSide = ENGINE_SIDE_UNKNOWN;\n'''
           if 'static EngineSide engineSide' not in s:
               if anchor not in s: raise SystemExit('engine-side anchor missing')
               s = s.replace(anchor, insert, 1)
-
           start = s.index('static bool extractMoveFromLCommand(String& uci) {')
           end = s.index('\nstatic void handleCL(', start)
           new = r'''static bool extractMoveFromLCommand(String& uci) {
     bool observed[81];
     int observedCount = 0;
-
     for (int i = 0; i < 81; ++i) {
         observed[i] = led[i] != 0;
         if (observed[i]) ++observedCount;
     }
-
     Serial.printf("[GATEWAY] raw active corner LEDs=%d\n", observedCount);
-
     if (observedCount < 6 || observedCount > 8) {
         Serial.println("[GATEWAY] L ignored: raw LED pattern is not a two-square move");
         return false;
     }
-
     auto addSquareCorners = [](bool mask[81], int file, int rankTop) {
         mask[file * 9 + rankTop] = true;
         mask[(file + 1) * 9 + rankTop] = true;
         mask[file * 9 + rankTop + 1] = true;
         mask[(file + 1) * 9 + rankTop + 1] = true;
     };
-
     struct EndpointPair { int a; int b; };
     EndpointPair pairs[16];
     int pairCount = 0;
-
     for (int a = 0; a < 64; ++a) {
         for (int b = a + 1; b < 64; ++b) {
             bool expected[81] = {false};
             addSquareCorners(expected, a % 8, a / 8);
             addSquareCorners(expected, b % 8, b / 8);
-
             bool same = true;
             for (int i = 0; i < 81; ++i) {
-                if (expected[i] != observed[i]) {
-                    same = false;
-                    break;
-                }
+                if (expected[i] != observed[i]) { same = false; break; }
             }
-
-            if (same && pairCount < 16) {
-                pairs[pairCount++] = {a, b};
-            }
+            if (same && pairCount < 16) pairs[pairCount++] = {a, b};
         }
     }
-
     Serial.printf("[GATEWAY] raw LED endpoint pairs=%d\n", pairCount);
-
     if (pairCount != 1) {
         Serial.println("[GATEWAY] L ignored: LED endpoints are not unique");
         return false;
     }
-
     const int a = pairs[0].a;
     const int b = pairs[0].b;
     const char pieceA = board64[a];
     const char pieceB = board64[b];
     const bool occA = pieceA != '.';
     const bool occB = pieceB != '.';
-
-    Serial.printf(
-        "[GATEWAY] LED endpoints %s piece=%c, %s piece=%c\n",
+    Serial.printf("[GATEWAY] LED endpoints %s piece=%c, %s piece=%c\n",
         squareName(a % 8, a / 8).c_str(), pieceA,
-        squareName(b % 8, b / 8).c_str(), pieceB
-    );
-
+        squareName(b % 8, b / 8).c_str(), pieceB);
     auto sideOfPiece = [](char p) -> EngineSide {
         if (p >= 'A' && p <= 'Z') return ENGINE_SIDE_WHITE;
         if (p >= 'a' && p <= 'z') return ENGINE_SIDE_BLACK;
         return ENGINE_SIDE_UNKNOWN;
     };
-
     auto sideName = [](EngineSide side) -> const char* {
         if (side == ENGINE_SIDE_WHITE) return "white";
         if (side == ENGINE_SIDE_BLACK) return "black";
         return "unknown";
     };
-
     int source = -1;
     int destination = -1;
-
-    // Normal move: exactly one endpoint is occupied. Direction is explicit,
-    // so learn/refresh the side PicoChess is controlling.
     if (occA != occB) {
         source = occA ? a : b;
         destination = occA ? b : a;
-
         EngineSide learned = sideOfPiece(board64[source]);
         if (learned != ENGINE_SIDE_UNKNOWN && learned != engineSide) {
             engineSide = learned;
-            Serial.printf(
-                "[GATEWAY] engine side learned/refreshed: %s\n",
-                sideName(engineSide)
-            );
+            Serial.printf("[GATEWAY] engine side learned/refreshed: %s\n", sideName(engineSide));
         }
-    }
-    // Capture: both endpoints are occupied. LEDs do not contain direction;
-    // use only the already learned PicoChess side. PicoChess owns legality.
-    else if (occA && occB) {
+    } else if (occA && occB) {
         if (engineSide == ENGINE_SIDE_UNKNOWN) {
-            // Legacy direction hint, if present, can bootstrap a first-move capture.
             uint8_t patA = dominantSquarePattern(a % 8, a / 8);
             uint8_t patB = dominantSquarePattern(b % 8, b / 8);
-
             if (patA == 0x33 && patB == 0xCC) {
-                source = a;
-                destination = b;
-                engineSide = sideOfPiece(pieceA);
+                source = a; destination = b; engineSide = sideOfPiece(pieceA);
             } else if (patA == 0xCC && patB == 0x33) {
-                source = b;
-                destination = a;
-                engineSide = sideOfPiece(pieceB);
+                source = b; destination = a; engineSide = sideOfPiece(pieceB);
             } else {
-                Serial.println(
-                    "[GATEWAY] L ignored: capture direction unknown before engine side learned"
-                );
+                Serial.println("[GATEWAY] L ignored: capture direction unknown before engine side learned");
                 return false;
             }
-
-            Serial.printf(
-                "[GATEWAY] engine side learned from capture: %s\n",
-                sideName(engineSide)
-            );
+            Serial.printf("[GATEWAY] engine side learned from capture: %s\n", sideName(engineSide));
         } else {
             const bool aIsEngine = sideOfPiece(pieceA) == engineSide;
             const bool bIsEngine = sideOfPiece(pieceB) == engineSide;
-
             if (aIsEngine == bIsEngine) {
-                Serial.println(
-                    "[GATEWAY] L ignored: capture endpoints do not identify one engine piece"
-                );
+                Serial.println("[GATEWAY] L ignored: capture endpoints do not identify one engine piece");
                 return false;
             }
-
             source = aIsEngine ? a : b;
             destination = aIsEngine ? b : a;
         }
@@ -168,31 +119,16 @@ jobs:
         Serial.println("[GATEWAY] L ignored: both LED endpoints are empty");
         return false;
     }
-
-    uci =
-        squareName(source % 8, source / 8) +
-        squareName(destination % 8, destination / 8);
-
-    Serial.printf(
-        "[GATEWAY] PicoChess move direction resolved %s engine=%s\n",
-        uci.c_str(),
-        sideName(engineSide)
-    );
-
+    uci = squareName(source % 8, source / 8) + squareName(destination % 8, destination / 8);
+    Serial.printf("[GATEWAY] PicoChess move direction resolved %s engine=%s\n", uci.c_str(), sideName(engineSide));
     return true;
 }
 '''
           s = s[:start] + new + s[end:]
-
-          # Reset learned side when a full link/board context is lost.
           old = '    correctionFenCandidate = "";\n    boardSyncPurpose = BOARD_SYNC_NONE;'
           new_reset = '    correctionFenCandidate = "";\n    engineSide = ENGINE_SIDE_UNKNOWN;\n    boardSyncPurpose = BOARD_SYNC_NONE;'
-          if old in s:
-              s = s.replace(old, new_reset, 1)
-
-          s = s.replace('=== CynusLink Robust Core Baseline v2.8 ===',
-                        '=== CynusLink Robust Core Baseline v2.9 ===', 1)
-
+          if old in s: s = s.replace(old, new_reset, 1)
+          s = s.replace('=== CynusLink Robust Core Baseline v2.8 ===', '=== CynusLink Robust Core Baseline v2.9 ===', 1)
           p.write_text(s, encoding='utf-8')
           Path('.github/workflows/apply-v29-direction-fix.yml').unlink()
           PY
