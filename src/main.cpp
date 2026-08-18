@@ -18,6 +18,7 @@ static bool openingStartPhasePatch = false;
 static bool startStatusPendingPatch = false;
 static bool flippedBootGatePatch = false;
 static String lastStartupErrorDisplayPatch = "";
+static String lastGameErrorDisplayPatch = "";
 
 static int startOrientationPatch(String f) {
     int sp = f.indexOf(' ');
@@ -44,6 +45,31 @@ static int startupMismatchCountPatch(const char actual[65], const char expected[
     return n;
 }
 
+static String boardDifferenceDisplayPatch(String actualFen, String expectedFen) {
+    char actual[65], expected[65];
+    if (!fenPlacementTo64(actualFen, actual)) return "";
+    if (!fenPlacementTo64(expectedFen, expected)) return "";
+
+    String issues[2];
+    int count = 0;
+    for (int i = 0; i < 64 && count < 2; ++i) {
+        bool a = actual[i] != '.';
+        bool e = expected[i] != '.';
+        if (!a && e) {
+            issues[count++] = "-" + startupSquarePatch(i);
+        } else if (a && !e) {
+            issues[count++] = "+" + startupSquarePatch(i);
+        } else if (a && e && actual[i] != expected[i]) {
+            // Occupied by a different piece than expected.
+            issues[count++] = "+" + startupSquarePatch(i);
+        }
+    }
+
+    if (count == 0) return "";
+    if (count == 1) return issues[0];
+    return issues[0] + "/" + issues[1];
+}
+
 static String startupErrorDisplayPatch(String f) {
     char actual[65], normal[65], flipped[65];
     if (!fenPlacementTo64(f, actual)) return "";
@@ -63,7 +89,6 @@ static String startupErrorDisplayPatch(String f) {
         } else if (a && !e) {
             issues[count++] = "+" + startupSquarePatch(i);
         } else if (a && e && actual[i] != expected[i]) {
-            // Wrong piece on an occupied start square: mark the square as wrong.
             issues[count++] = "+" + startupSquarePatch(i);
         }
     }
@@ -88,12 +113,42 @@ static void showStartupErrorsPatch() {
     Serial.printf("[STARTUP] position error display: %s (error audio)\n", msg.c_str());
 }
 
+static void showGameRescanErrorsPatch() {
+    // The robust core already uses correctionFenCandidate while waiting for
+    // the engine. This is exactly the safe place to compare a repeated scan:
+    // a genuine human move has already been accepted and sent to ChessLink,
+    // so lastFenSentToChessLink is the expected physical position.
+    if (!initialStartupComplete || state != RUNNING || moveCycle != WAIT_ENGINE_MOVE) {
+        lastGameErrorDisplayPatch = "";
+        return;
+    }
+    if (!correctionFenCandidate.length() || !lastFenSentToChessLink.length()) return;
+
+    String msg = boardDifferenceDisplayPatch(correctionFenCandidate, lastFenSentToChessLink);
+    if (!msg.length()) {
+        if (lastGameErrorDisplayPatch.length()) {
+            lastGameErrorDisplayPatch = "";
+            cynusDisplay("play");
+            Serial.println("[RESCAN] board matches expected position again");
+        }
+        return;
+    }
+    if (msg == lastGameErrorDisplayPatch) return;
+
+    lastGameErrorDisplayPatch = msg;
+    displayPlayPending = false;
+    cynusDisplay(msg.c_str());
+    sendCynus("play audio error\n");
+    Serial.printf("[RESCAN] board difference: %s (error audio)\n", msg.c_str());
+}
+
 static void configureStartOrientationPatch(bool flipped) {
     startOrientationLatchedPatch = true;
     startOrientationFlippedPatch = flipped;
     openingStartPhasePatch = true;
     startStatusPendingPatch = true;
     lastStartupErrorDisplayPatch = "";
+    lastGameErrorDisplayPatch = "";
 
     // The physical orientation also tells us the software side immediately.
     // Normal board: human is White, software is Black.
@@ -112,11 +167,6 @@ static void configureStartOrientationPatch(bool flipped) {
 }
 
 static void processStartOrientationPatch() {
-    // Special boot case: the original robust core deliberately accepts only
-    // the normal start FEN during BOARD_SYNC_STARTUP. A 180-degree start is
-    // therefore completed here. ChessLink advertising is held back until
-    // Cynus has explicitly said "get move", so PicoChess cannot send its
-    // first white move before the robot is ready to receive it.
     if (!initialStartupComplete && state == SYNC_BOARD &&
         startOrientationPatch(bufferedFen) == 1) {
         if (!startOrientationLatchedPatch) {
@@ -138,8 +188,6 @@ static void processStartOrientationPatch() {
         }
     }
 
-    // Once Cynus is genuinely waiting for an external move, expose the
-    // already-synchronized flipped start board to ChessLink/PicoChess.
     if (flippedBootGatePatch && cynusWaitingForMove) {
         flippedBootGatePatch = false;
         boardSynced = true;
@@ -152,9 +200,6 @@ static void processStartOrientationPatch() {
 
     int acceptedOrientation = startOrientationPatch(fenNow);
 
-    // Any accepted normal or flipped initial position marks a new game.
-    // The latch guarantees exactly one flip command while that same start
-    // position remains on the board. It is released after the first move.
     if (acceptedOrientation >= 0) {
         bool flipped = acceptedOrientation == 1;
         if (!startOrientationLatchedPatch || startOrientationFlippedPatch != flipped) {
@@ -170,23 +215,14 @@ static void processStartOrientationPatch() {
         Serial.println("[STARTPOS] initial position left; orientation latch released for next game");
     }
 
-    // While the physical board is still exactly in its initial position,
-    // preserve the correct first-turn state even if the legacy core receives
-    // startup callbacks that normally default to WAIT_HUMAN_MOVE.
     if (openingStartPhasePatch && state == RUNNING && acceptedOrientation >= 0) {
         if (moveCycle == WAIT_ROBOT_POSITION) {
-            // The first software move has been accepted and sent to Cynus.
-            // Do not force WAIT_ENGINE_MOVE again while the robot is moving.
             openingStartPhasePatch = false;
         } else {
             setMoveCycle(startOrientationFlippedPatch ? WAIT_ENGINE_MOVE : WAIT_HUMAN_MOVE);
         }
     }
 
-    // Force the initial board status exactly once per recognized start.
-    // In the flipped/software-first case this is deliberately gated on the
-    // real Cynus "get move" signal, preventing an early PicoChess move from
-    // being acknowledged and then discarded.
     if (startStatusPendingPatch && boardSynced && clConnected && clNotify &&
         (!startOrientationFlippedPatch || cynusWaitingForMove)) {
         clStatusPending = true;
@@ -195,6 +231,7 @@ static void processStartOrientationPatch() {
     }
 
     showStartupErrorsPatch();
+    showGameRescanErrorsPatch();
 }
 
 void setup() {
