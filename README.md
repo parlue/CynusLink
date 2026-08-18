@@ -31,7 +31,66 @@ CynusLink uses the Cynus display to provide simple status information without af
 | `ready` | ChessLink connected |
 | `play` | CynusLink is ready to play |
 
-After ChessLink connects, `ready` is displayed briefly and automatically changes to `play`.
+After ChessLink connects, `ready` is held until Cynus confirms external-engine readiness. Only then does the display change to `play`.
+
+### Playing as Black
+
+CynusLink supports starting a game with the human player on the **black** side.
+
+Set up the complete initial position with the board rotated by 180 degrees and scan the board. CynusLink recognizes the flipped starting position and sends:
+
+``` text
+set flip board on
+```
+
+In this mode CynusLink knows that the software plays White. The gateway waits for the first move from the ChessLink software and does not wait for a human move first.
+
+The sequence is:
+
+1. The flipped initial position is detected.
+2. Cynus receives `set flip board on`.
+3. CynusLink waits until Cynus reports `get move`.
+4. The initial board position is reported to the ChessLink software once.
+5. If the software is configured to play White, it can immediately send the first move.
+6. Cynus executes the software move.
+7. After the robot position is confirmed, the game continues with the human player on Black.
+
+For the normal initial position CynusLink sends:
+
+``` text
+set flip board off
+```
+
+and waits for the human player to make the first White move.
+
+The flip command is set whenever a valid initial position is recognized, including after boot and when a new game is started.
+
+### Initial Position Errors
+
+During startup CynusLink compares the scanned board with the expected initial position. If the position is not correct, the Cynus display shows up to **two differences at the same time**.
+
+Examples:
+
+| Display | Meaning |
+| --- | --- |
+| `+E4` | A piece is present on E4 where the initial position expects an empty square, or the wrong piece is on E4 |
+| `-F8` | The expected piece on F8 is missing |
+| `+E4/-F8` | Two position differences are currently detected |
+
+The symbols mean:
+
+- `+` = there is an unexpected or wrong piece on this square
+- `-` = the expected piece is missing from this square
+
+Only two differences fit on the seven-character Cynus display. Correct the displayed squares and scan again. If more differences remain, the next scan shows the next current error pattern.
+
+Whenever a new startup error pattern is detected, CynusLink also asks the robot to play its error sound:
+
+``` text
+play audio error
+```
+
+The same unchanged error pattern is not sounded repeatedly.
 
 ### Engine Moves
 
@@ -115,6 +174,9 @@ The ESP32-S3 operates simultaneously as:
 -   Reads the physical Cynus board position
 -   Transfers physical moves to the chess software
 -   Sends engine moves to the Cynus robot
+-   Supports normal and 180-degree-flipped initial positions
+-   Supports playing as White or Black
+-   Shows startup position differences on the Cynus display
 -   New games can be started by setting up the initial position and
     using the Cynus scanner
 -   Standalone operation with only USB power
