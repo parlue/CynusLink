@@ -1,0 +1,55 @@
+name: Apply BLE fragment delay patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-ble-fragment-delay.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch src/main.ccp
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/main.ccp')
+          text = p.read_text(encoding='utf-8')
+
+          old = '''        delay(8);\n    }\n}\n\nstatic void sendStatus() {\n'''
+          new = '''        // Gerhard Kalab/python-mchess ChessLink transport is deliberately\n        // conservative between BLE writes. Give fragmented status frames\n        // enough time to be reassembled reliably by the client.\n        delay(40);\n    }\n}\n\nstatic void sendStatus() {\n'''
+
+          if old not in text:
+              raise SystemExit('Expected ChessLink fragmentation delay anchor not found')
+          text = text.replace(old, new, 1)
+
+          if '=== CynusLink Robust Core Baseline v2.3 ===' not in text:
+              raise SystemExit('Expected v2.3 banner not found')
+          text = text.replace(
+              '=== CynusLink Robust Core Baseline v2.3 ===',
+              '=== CynusLink Robust Core Baseline v2.4 ===',
+              1
+          )
+
+          p.write_text(text, encoding='utf-8')
+          Path('.github/workflows/apply-ble-fragment-delay.yml').unlink()
+          PY
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "CynusLink Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/main.ccp .github/workflows/apply-ble-fragment-delay.yml
+          git commit -m "Slow ChessLink BLE fragmentation for PicoChess"
+          git push
