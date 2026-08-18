@@ -66,3 +66,5 @@ jobs:
             git commit -m 'Build CynusLink v2.11 firmware [skip ci]'
             git push
           fi
+
+# build trigger: v2.11
