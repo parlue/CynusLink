@@ -118,6 +118,11 @@ static uint32_t nextCynusScanAt = 0;
 static uint32_t boardSyncRequestAt = 0;
 static bool boardSyncRequestPending = false;
 
+// Startup/recovery uses an active physical scan before reading FEN.
+static bool boardScanPending = false;
+static uint32_t boardScanGetFenAt = 0;
+static constexpr uint32_t BOARD_SCAN_WAIT_MS = 1000;
+
 static uint32_t lastLinkHealthCheckAt = 0;
 static constexpr uint32_t LINK_HEALTH_CHECK_MS = 1000;
 
@@ -1511,6 +1516,7 @@ static bool connectCynus() {
     chessAdvertisingPendingAfterEngineOff = false;
     boardSyncPurpose = BOARD_SYNC_NONE;
     boardSyncRequestPending = false;
+    boardScanPending = false;
     boardSynced = false;
 
     if (sendCynus("set internal engine off\n")) {
@@ -1624,6 +1630,7 @@ static void recoverCynusLoss(const char* source) {
     bufferedFen = "";
     boardSyncPurpose = BOARD_SYNC_NONE;
     boardSyncRequestPending = false;
+    boardScanPending = false;
 
     cynusWaitingForMove = false;
     publishNextFenToChessLink = false;
@@ -1719,8 +1726,42 @@ static void processSupervision() {
         (int32_t)(millis() - boardSyncRequestAt) >= 0
     ) {
         boardSyncRequestPending = false;
-        Serial.println("[SYNC] actively requesting physical FEN");
-        sendCynus("get fen\n");
+
+        Serial.println("[SYNC] starting physical board scan");
+
+        if (sendCynus("scan board\n")) {
+            boardScanPending = true;
+            boardScanGetFenAt =
+                millis() + BOARD_SCAN_WAIT_MS;
+        } else {
+            Serial.println(
+                "[SYNC] ERROR: could not start board scan"
+            );
+
+            boardSyncRequestPending = true;
+            boardSyncRequestAt = millis() + 500;
+        }
+    }
+
+    if (
+        boardScanPending &&
+        cynusReady &&
+        (int32_t)(millis() - boardScanGetFenAt) >= 0
+    ) {
+        boardScanPending = false;
+
+        Serial.println(
+            "[SYNC] board scan complete; requesting fresh FEN"
+        );
+
+        if (!sendCynus("get fen\n")) {
+            Serial.println(
+                "[SYNC] ERROR: could not request FEN after scan"
+            );
+
+            boardSyncRequestPending = true;
+            boardSyncRequestAt = millis() + 500;
+        }
     }
 
     // Once per second verify the actual NimBLE link state as a fallback
@@ -1795,7 +1836,7 @@ void setup() {
 
     Serial.println();
     Serial.println(
-        "=== CynusLink Robust Core Baseline v2.2 ==="
+        "=== CynusLink Robust Core Baseline v2.3 ==="
     );
 
     memset(ee, 0, sizeof(ee));
