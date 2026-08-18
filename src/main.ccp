@@ -63,6 +63,8 @@ enum EngineSide { ENGINE_SIDE_UNKNOWN, ENGINE_SIDE_WHITE, ENGINE_SIDE_BLACK };
 static EngineSide engineSide = ENGINE_SIDE_UNKNOWN;
 
 static constexpr const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+static constexpr const char* SOUND_OFF_FEN = "rnbq1bnr/pppppppp/8/4k3/8/8/PPPPPPPP/RNBQKBNR";
+static constexpr const char* SOUND_ON_FEN = "rnbq1bnr/pppppppp/4k3/8/8/8/PPPPPPPP/RNBQKBNR";
 
 enum BoardSyncPurpose { BOARD_SYNC_NONE, BOARD_SYNC_STARTUP, BOARD_SYNC_RECOVERY };
 static BoardSyncPurpose boardSyncPurpose = BOARD_SYNC_NONE;
@@ -225,6 +227,32 @@ static bool fenPlacementTo64(String f, char out[65]) {
     }
     if (n != 64) return false;
     out[64] = 0;
+    return true;
+}
+
+static bool handleSoundConfigFen(String f) {
+    int sp = f.indexOf(' ');
+    if (sp >= 0) f = f.substring(0, sp);
+
+    bool soundOn = f == SOUND_ON_FEN;
+    bool soundOff = f == SOUND_OFF_FEN;
+    if (!soundOn && !soundOff) return false;
+
+    const char* command = soundOn ? "sound 70\n" : "sound 0\n";
+    if (!sendCynus(command)) {
+        Serial.printf("[SOUND] failed to set sound %s\n", soundOn ? "ON" : "OFF");
+        return true;
+    }
+
+    publishNextFenToChessLink = false;
+    correctionFenCandidate = "";
+    boardSynced = fenNow.length() > 0;
+    cynusWaitingForMove = true;
+    setMoveCycle(WAIT_HUMAN_MOVE);
+    displayPlayPending = false;
+    cynusDisplay(soundOn ? "snd on" : "snd off");
+    schedulePlayDisplay(2000);
+    Serial.printf("[SOUND] sound %s selected with black king; config FEN suppressed from ChessLink\n", soundOn ? "ON" : "OFF");
     return true;
 }
 
@@ -678,6 +706,7 @@ static void cynusBytes(const uint8_t* data, size_t len) {
             Serial.printf("[CYNUS LINE] %s\n", line.c_str());
 
             if (line.equalsIgnoreCase("get move")) {
+                bool firstExternalReady = !cynusExternalModeConfirmed;
                 cynusWaitingForMove = true;
                 cynusExternalModeConfirmed = true;
                 Serial.println("[GATEWAY] Cynus is waiting for an external move");
@@ -688,6 +717,11 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                     continue;
                 }
                 setState(RUNNING);
+                if (firstExternalReady) {
+                    displayPlayPending = false;
+                    cynusDisplay("play");
+                    Serial.println("[DISPLAY] PLAY released after Cynus external-engine readiness confirmation");
+                }
                 if (moveCycle == WAIT_HUMAN_MOVE) {
                     boardSynced = false;
                     publishNextFenToChessLink = true;
@@ -721,6 +755,11 @@ static void cynusBytes(const uint8_t* data, size_t len) {
             if (line.startsWith("fen:")) {
                 String f = line.substring(4);
                 f.trim();
+
+                if (initialStartupComplete && state == RUNNING && clConnected && moveCycle == WAIT_HUMAN_MOVE && handleSoundConfigFen(f)) {
+                    continue;
+                }
+
                 if (fen2board(f)) {
                     bufferedFen = f;
                     Serial.printf("[BOARD] buffered FEN %s\n", bufferedFen.c_str());
@@ -1019,8 +1058,9 @@ static void processSupervision() {
             setState(RUNNING);
             setMoveCycle(WAIT_HUMAN_MOVE);
             Serial.println("[CHESS] connected to synchronized board; gateway RUNNING");
+            displayPlayPending = false;
             cynusDisplay("ready");
-            schedulePlayDisplay(1800);
+            Serial.println("[DISPLAY] READY held until Cynus confirms external-engine mode");
         } else {
             Serial.println("[CHESS] connect event without synchronized board; rejecting");
             chessRejectEventPending = true;
@@ -1072,7 +1112,7 @@ void setup() {
     Serial.begin(115200);
     delay(1500);
     Serial.println();
-    Serial.println("=== CynusLink Robust Core Baseline v2.10 ===");
+    Serial.println("=== CynusLink Robust Core Baseline v2.11 ===");
     memset(ee, 0, sizeof(ee));
     ee[0] = 0x00;
     ee[1] = 0x14;
