@@ -84,7 +84,8 @@ static void showStartupErrorsPatch() {
     if (!msg.length() || msg == lastStartupErrorDisplayPatch) return;
     lastStartupErrorDisplayPatch = msg;
     cynusDisplay(msg.c_str());
-    Serial.printf("[STARTUP] position error display: %s\n", msg.c_str());
+    sendCynus("play audio error\n");
+    Serial.printf("[STARTUP] position error display: %s (error audio)\n", msg.c_str());
 }
 
 static void configureStartOrientationPatch(bool flipped) {
