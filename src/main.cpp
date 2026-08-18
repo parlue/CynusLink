@@ -17,6 +17,7 @@ static bool startOrientationFlippedPatch = false;
 static bool openingStartPhasePatch = false;
 static bool startStatusPendingPatch = false;
 static bool flippedBootGatePatch = false;
+static String lastStartupErrorDisplayPatch = "";
 
 static int startOrientationPatch(String f) {
     int sp = f.indexOf(' ');
@@ -26,11 +27,72 @@ static int startOrientationPatch(String f) {
     return -1;
 }
 
+static String startupSquarePatch(int index) {
+    String s;
+    s += (char)('A' + (index % 8));
+    s += (char)('8' - (index / 8));
+    return s;
+}
+
+static int startupMismatchCountPatch(const char actual[65], const char expected[65]) {
+    int n = 0;
+    for (int i = 0; i < 64; ++i) {
+        bool a = actual[i] != '.';
+        bool e = expected[i] != '.';
+        if (a != e || (a && e && actual[i] != expected[i])) ++n;
+    }
+    return n;
+}
+
+static String startupErrorDisplayPatch(String f) {
+    char actual[65], normal[65], flipped[65];
+    if (!fenPlacementTo64(f, actual)) return "";
+    if (!fenPlacementTo64(START_FEN, normal)) return "";
+    if (!fenPlacementTo64(FLIPPED_START_FEN_PATCH, flipped)) return "";
+
+    const char* expected = startupMismatchCountPatch(actual, flipped) < startupMismatchCountPatch(actual, normal)
+        ? flipped : normal;
+
+    String issues[2];
+    int count = 0;
+    for (int i = 0; i < 64 && count < 2; ++i) {
+        bool a = actual[i] != '.';
+        bool e = expected[i] != '.';
+        if (!a && e) {
+            issues[count++] = "-" + startupSquarePatch(i);
+        } else if (a && !e) {
+            issues[count++] = "+" + startupSquarePatch(i);
+        } else if (a && e && actual[i] != expected[i]) {
+            // Wrong piece on an occupied start square: mark the square as wrong.
+            issues[count++] = "+" + startupSquarePatch(i);
+        }
+    }
+
+    if (count == 0) return "";
+    if (count == 1) return issues[0];
+    return issues[0] + "/" + issues[1];
+}
+
+static void showStartupErrorsPatch() {
+    if (initialStartupComplete || state != SYNC_BOARD || bufferedFen.length() == 0) return;
+    if (startOrientationPatch(bufferedFen) >= 0) {
+        lastStartupErrorDisplayPatch = "";
+        return;
+    }
+
+    String msg = startupErrorDisplayPatch(bufferedFen);
+    if (!msg.length() || msg == lastStartupErrorDisplayPatch) return;
+    lastStartupErrorDisplayPatch = msg;
+    cynusDisplay(msg.c_str());
+    Serial.printf("[STARTUP] position error display: %s\n", msg.c_str());
+}
+
 static void configureStartOrientationPatch(bool flipped) {
     startOrientationLatchedPatch = true;
     startOrientationFlippedPatch = flipped;
     openingStartPhasePatch = true;
     startStatusPendingPatch = true;
+    lastStartupErrorDisplayPatch = "";
 
     // The physical orientation also tells us the software side immediately.
     // Normal board: human is White, software is Black.
@@ -130,6 +192,8 @@ static void processStartOrientationPatch() {
         startStatusPendingPatch = false;
         Serial.println("[STARTPOS] initial board status queued for PicoChess");
     }
+
+    showStartupErrorsPatch();
 }
 
 void setup() {
