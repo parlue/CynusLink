@@ -10,23 +10,11 @@ static constexpr const char* CL_SERVICE = "49535343-fe7d-4ae5-8fa9-9fafd205e455"
 static constexpr const char* CL_TX = "49535343-1e4d-4bd9-ba61-23c647249616";
 static constexpr const char* CL_RX = "49535343-8841-43f4-a8d4-ecbe34729bb3";
 
-enum GatewayState {
-    SEARCH_CYNUS,
-    WAIT_CHESSLINK,
-    SYNC_BOARD,
-    RUNNING
-};
-
+enum GatewayState { SEARCH_CYNUS, WAIT_CHESSLINK, SYNC_BOARD, RUNNING };
 static GatewayState state = SEARCH_CYNUS;
 
-enum MoveCycleState {
-    WAIT_HUMAN_MOVE,
-    WAIT_ENGINE_MOVE,
-    WAIT_ROBOT_POSITION
-};
-
+enum MoveCycleState { WAIT_HUMAN_MOVE, WAIT_ENGINE_MOVE, WAIT_ROBOT_POSITION };
 static MoveCycleState moveCycle = WAIT_HUMAN_MOVE;
-
 static uint32_t moveCycleEnteredAt = 0;
 static uint32_t lastMoveWaitWarningAt = 0;
 
@@ -70,14 +58,13 @@ static String fenNow = "";
 static bool boardSynced = false;
 static String lastFenSentToChessLink = "";
 static String correctionFenCandidate = "";
+
+enum EngineSide { ENGINE_SIDE_UNKNOWN, ENGINE_SIDE_WHITE, ENGINE_SIDE_BLACK };
+static EngineSide engineSide = ENGINE_SIDE_UNKNOWN;
+
 static constexpr const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 
-enum BoardSyncPurpose {
-    BOARD_SYNC_NONE,
-    BOARD_SYNC_STARTUP,
-    BOARD_SYNC_RECOVERY
-};
-
+enum BoardSyncPurpose { BOARD_SYNC_NONE, BOARD_SYNC_STARTUP, BOARD_SYNC_RECOVERY };
 static BoardSyncPurpose boardSyncPurpose = BOARD_SYNC_NONE;
 static bool initialStartupComplete = false;
 static bool chessAdvertisingAllowed = false;
@@ -147,8 +134,7 @@ static int hn(char c) {
 }
 
 static bool hb(char a, char b, uint8_t& v) {
-    int x = hn(a);
-    int y = hn(b);
+    int x = hn(a), y = hn(b);
     if (x < 0 || y < 0) return false;
     v = (x << 4) | y;
     return true;
@@ -261,9 +247,7 @@ static void sendStatus() {
     lastFenSentToChessLink = fenNow;
 }
 
-static bool autoReport() {
-    return (ee[2] & 7) != 1;
-}
+static bool autoReport() { return (ee[2] & 7) != 1; }
 
 class ServerCB : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* server, NimBLEConnInfo& info) override {
@@ -292,7 +276,7 @@ class ServerCB : public NimBLEServerCallbacks {
 static ServerCB serverCB;
 
 class TxCB : public NimBLECharacteristicCallbacks {
-    void onSubscribe(NimBLECharacteristic* characteristic, NimBLEConnInfo& info, uint16_t value) override {
+    void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&, uint16_t value) override {
         clNotify = value != 0;
         Serial.printf("[CHESS] notify %s\n", clNotify ? "on" : "off");
     }
@@ -300,7 +284,7 @@ class TxCB : public NimBLECharacteristicCallbacks {
 static TxCB txCB;
 
 class RxCB : public NimBLECharacteristicCallbacks {
-    void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& info) override {
+    void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo&) override {
         std::string value = characteristic->getValue();
         Serial.printf("[CHESS RX] chunk %u\n", (unsigned)value.size());
         for (uint8_t b : value) {
@@ -328,13 +312,6 @@ static String squareName(int file, int rankTop) {
     return s;
 }
 
-struct HighlightedSquare {
-    int file;
-    int rankTop;
-    int score;
-    uint8_t dominantPattern;
-};
-
 static uint8_t dominantSquarePattern(int file, int rankTop) {
     const uint8_t corners[4] = {
         ledValue(file, rankTop), ledValue(file + 1, rankTop),
@@ -347,15 +324,6 @@ static uint8_t dominantSquarePattern(int file, int rankTop) {
     return (uint8_t)best;
 }
 
-static int squareHighlightScore(int file, int rankTop) {
-    int score = 0;
-    if (ledValue(file, rankTop) != 0) ++score;
-    if (ledValue(file + 1, rankTop) != 0) ++score;
-    if (ledValue(file, rankTop + 1) != 0) ++score;
-    if (ledValue(file + 1, rankTop + 1) != 0) ++score;
-    return score;
-}
-
 static bool extractMoveFromLCommand(String& uci) {
     bool observed[81];
     int observedCount = 0;
@@ -363,7 +331,6 @@ static bool extractMoveFromLCommand(String& uci) {
         observed[i] = led[i] != 0;
         if (observed[i]) ++observedCount;
     }
-
     Serial.printf("[GATEWAY] raw active corner LEDs=%d\n", observedCount);
     if (observedCount < 6 || observedCount > 8) {
         Serial.println("[GATEWAY] L ignored: raw LED pattern is not a two-square move");
@@ -380,7 +347,6 @@ static bool extractMoveFromLCommand(String& uci) {
     struct EndpointPair { int a; int b; };
     EndpointPair pairs[16];
     int pairCount = 0;
-
     for (int a = 0; a < 64; ++a) {
         for (int b = a + 1; b < 64; ++b) {
             bool expected[81] = {false};
@@ -395,124 +361,78 @@ static bool extractMoveFromLCommand(String& uci) {
     }
 
     Serial.printf("[GATEWAY] raw LED endpoint pairs=%d\n", pairCount);
-    if (pairCount == 0) {
-        Serial.println("[GATEWAY] L ignored: no exact two-square LED pattern");
+    if (pairCount != 1) {
+        Serial.println("[GATEWAY] L ignored: LED endpoints are not unique");
         return false;
     }
 
-    auto isWhitePiece = [](char p) { return p >= 'A' && p <= 'Z'; };
-    auto isBlackPiece = [](char p) { return p >= 'a' && p <= 'z'; };
-    auto sameColor = [&](char a, char b) {
-        if (a == '.' || b == '.') return false;
-        return (isWhitePiece(a) && isWhitePiece(b)) || (isBlackPiece(a) && isBlackPiece(b));
+    int a = pairs[0].a;
+    int b = pairs[0].b;
+    char pieceA = board64[a];
+    char pieceB = board64[b];
+    bool occA = pieceA != '.';
+    bool occB = pieceB != '.';
+
+    Serial.printf("[GATEWAY] LED endpoints %s piece=%c, %s piece=%c\n",
+        squareName(a % 8, a / 8).c_str(), pieceA,
+        squareName(b % 8, b / 8).c_str(), pieceB);
+
+    auto sideOfPiece = [](char p) -> EngineSide {
+        if (p >= 'A' && p <= 'Z') return ENGINE_SIDE_WHITE;
+        if (p >= 'a' && p <= 'z') return ENGINE_SIDE_BLACK;
+        return ENGINE_SIDE_UNKNOWN;
     };
-    auto signInt = [](int v) { return v < 0 ? -1 : (v > 0 ? 1 : 0); };
-    auto pathClear = [&](int sf, int sr, int df, int dr) {
-        int stepF = signInt(df - sf);
-        int stepR = signInt(dr - sr);
-        int f = sf + stepF;
-        int r = sr + stepR;
-        while (f != df || r != dr) {
-            if (f < 0 || f > 7 || r < 0 || r > 7) return false;
-            if (board64[r * 8 + f] != '.') return false;
-            f += stepF;
-            r += stepR;
+    auto sideName = [](EngineSide side) -> const char* {
+        if (side == ENGINE_SIDE_WHITE) return "white";
+        if (side == ENGINE_SIDE_BLACK) return "black";
+        return "unknown";
+    };
+
+    int source = -1;
+    int destination = -1;
+
+    if (occA != occB) {
+        source = occA ? a : b;
+        destination = occA ? b : a;
+        EngineSide learned = sideOfPiece(board64[source]);
+        if (learned != ENGINE_SIDE_UNKNOWN && learned != engineSide) {
+            engineSide = learned;
+            Serial.printf("[GATEWAY] engine side learned/refreshed: %s\n", sideName(engineSide));
         }
-        return true;
-    };
-
-    auto legalGeometry = [&](int source, int destination) {
-        char piece = board64[source];
-        if (piece == '.') return false;
-        char target = board64[destination];
-        if (sameColor(piece, target)) return false;
-
-        int sf = source % 8, sr = source / 8;
-        int df = destination % 8, dr = destination / 8;
-        int dfile = df - sf, drank = dr - sr;
-        int adf = dfile < 0 ? -dfile : dfile;
-        int adr = drank < 0 ? -drank : drank;
-
-        switch (piece) {
-            case 'P': {
-                int dir = -1;
-                if (dfile == 0 && drank == dir && target == '.') return true;
-                if (dfile == 0 && sr == 6 && drank == 2 * dir && target == '.') {
-                    return board64[(sr + dir) * 8 + sf] == '.';
-                }
-                if (adf == 1 && drank == dir && target != '.' && isBlackPiece(target)) return true;
-                if (adf == 1 && drank == dir && target == '.') return board64[sr * 8 + df] == 'p';
+    } else if (occA && occB) {
+        if (engineSide == ENGINE_SIDE_UNKNOWN) {
+            uint8_t patA = dominantSquarePattern(a % 8, a / 8);
+            uint8_t patB = dominantSquarePattern(b % 8, b / 8);
+            if (patA == 0x33 && patB == 0xCC) {
+                source = a;
+                destination = b;
+                engineSide = sideOfPiece(pieceA);
+            } else if (patA == 0xCC && patB == 0x33) {
+                source = b;
+                destination = a;
+                engineSide = sideOfPiece(pieceB);
+            } else {
+                Serial.println("[GATEWAY] L ignored: capture direction unknown before engine side learned");
                 return false;
             }
-            case 'p': {
-                int dir = 1;
-                if (dfile == 0 && drank == dir && target == '.') return true;
-                if (dfile == 0 && sr == 1 && drank == 2 * dir && target == '.') {
-                    return board64[(sr + dir) * 8 + sf] == '.';
-                }
-                if (adf == 1 && drank == dir && target != '.' && isWhitePiece(target)) return true;
-                if (adf == 1 && drank == dir && target == '.') return board64[sr * 8 + df] == 'P';
+            Serial.printf("[GATEWAY] engine side learned from capture: %s\n", sideName(engineSide));
+        } else {
+            bool aIsEngine = sideOfPiece(pieceA) == engineSide;
+            bool bIsEngine = sideOfPiece(pieceB) == engineSide;
+            if (aIsEngine == bIsEngine) {
+                Serial.println("[GATEWAY] L ignored: capture endpoints do not identify one engine piece");
                 return false;
             }
-            case 'N': case 'n':
-                return (adf == 1 && adr == 2) || (adf == 2 && adr == 1);
-            case 'B': case 'b':
-                return adf == adr && adf > 0 && pathClear(sf, sr, df, dr);
-            case 'R': case 'r':
-                return ((dfile == 0) != (drank == 0)) && pathClear(sf, sr, df, dr);
-            case 'Q': case 'q': {
-                bool diagonal = adf == adr && adf > 0;
-                bool straight = ((dfile == 0) != (drank == 0));
-                return (diagonal || straight) && pathClear(sf, sr, df, dr);
-            }
-            case 'K': case 'k': {
-                if (adf <= 1 && adr <= 1 && (adf + adr) > 0) return true;
-                if (drank == 0 && sf == 4 && adf == 2) {
-                    bool correctRank = (piece == 'K' && sr == 7) || (piece == 'k' && sr == 0);
-                    if (!correctRank || !pathClear(sf, sr, df, dr)) return false;
-                    int rookFile = dfile > 0 ? 7 : 0;
-                    char expectedRook = piece == 'K' ? 'R' : 'r';
-                    return board64[sr * 8 + rookFile] == expectedRook;
-                }
-                return false;
-            }
+            source = aIsEngine ? a : b;
+            destination = aIsEngine ? b : a;
         }
-        return false;
-    };
-
-    struct MoveCandidate { int source; int destination; };
-    MoveCandidate candidates[16];
-    int candidateCount = 0;
-    auto addCandidate = [&](int source, int destination) {
-        if (!legalGeometry(source, destination)) return;
-        for (int i = 0; i < candidateCount; ++i) {
-            if (candidates[i].source == source && candidates[i].destination == destination) return;
-        }
-        if (candidateCount < 16) candidates[candidateCount++] = {source, destination};
-    };
-
-    for (int i = 0; i < pairCount; ++i) {
-        addCandidate(pairs[i].a, pairs[i].b);
-        addCandidate(pairs[i].b, pairs[i].a);
-    }
-
-    Serial.printf("[GATEWAY] legal LED move candidates=%d\n", candidateCount);
-    for (int i = 0; i < candidateCount; ++i) {
-        Serial.printf("[GATEWAY] legal candidate %s%s piece=%c\n",
-            squareName(candidates[i].source % 8, candidates[i].source / 8).c_str(),
-            squareName(candidates[i].destination % 8, candidates[i].destination / 8).c_str(),
-            board64[candidates[i].source]);
-    }
-
-    if (candidateCount != 1) {
-        Serial.println("[GATEWAY] L ignored: move remains ambiguous or invalid");
+    } else {
+        Serial.println("[GATEWAY] L ignored: both LED endpoints are empty");
         return false;
     }
 
-    int source = candidates[0].source;
-    int destination = candidates[0].destination;
     uci = squareName(source % 8, source / 8) + squareName(destination % 8, destination / 8);
-    Serial.printf("[GATEWAY] raw LED move resolved %s piece=%c\n", uci.c_str(), board64[source]);
+    Serial.printf("[GATEWAY] PicoChess move direction resolved %s engine=%s\n", uci.c_str(), sideName(engineSide));
     return true;
 }
 
@@ -653,7 +573,6 @@ static void cynusBytes(const uint8_t* data, size_t len) {
             cynusLine = "";
             line.trim();
             Serial.printf("[CYNUS LINE] %s\n", line.c_str());
-
             if (line.equalsIgnoreCase("get move")) {
                 cynusWaitingForMove = true;
                 cynusExternalModeConfirmed = true;
@@ -692,14 +611,12 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                 }
                 continue;
             }
-
             if (line.startsWith("fen:")) {
                 String f = line.substring(4);
                 f.trim();
                 if (fen2board(f)) {
                     bufferedFen = f;
                     Serial.printf("[BOARD] buffered FEN %s\n", bufferedFen.c_str());
-
                     if (state == SYNC_BOARD && cynusReady && boardSyncPurpose != BOARD_SYNC_NONE) {
                         String placement = bufferedFen;
                         int placementSpace = placement.indexOf(' ');
@@ -717,6 +634,7 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                         boardSyncPurpose = BOARD_SYNC_NONE;
                         if (completedPurpose == BOARD_SYNC_STARTUP) {
                             initialStartupComplete = true;
+                            engineSide = ENGINE_SIDE_UNKNOWN;
                             Serial.println("[STARTUP] initial position confirmed");
                         } else Serial.println("[RECOVERY] current physical position refreshed");
                         if (!clConnected) {
@@ -728,7 +646,6 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                         }
                         continue;
                     }
-
                     if (state == RUNNING && clConnected && publishNextFenToChessLink) {
                         fenNow = bufferedFen;
                         boardSynced = true;
@@ -740,14 +657,12 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                         setMoveCycle(WAIT_ENGINE_MOVE);
                         continue;
                     }
-
                     if (state == RUNNING && clConnected && moveCycle == WAIT_ENGINE_MOVE) {
                         correctionFenCandidate = bufferedFen;
                         if (correctionFenCandidate != lastFenSentToChessLink) Serial.printf("[CORRECTION] candidate FEN buffered %s\n", correctionFenCandidate.c_str());
                         else Serial.println("[CORRECTION] duplicate FEN buffered; no resend needed");
                         continue;
                     }
-
                     if (state == RUNNING && moveCycle == WAIT_ROBOT_POSITION) {
                         fenNow = bufferedFen;
                         boardSynced = true;
@@ -756,7 +671,6 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                         setMoveCycle(WAIT_HUMAN_MOVE);
                         continue;
                     }
-
                     Serial.println("[BOARD] camera/intermediate FEN buffered only; not sent to ChessLink");
                 }
             }
@@ -764,7 +678,7 @@ static void cynusBytes(const uint8_t* data, size_t len) {
     }
 }
 
-static void cynusNotify(NimBLERemoteCharacteristic* characteristic, uint8_t* data, size_t len, bool notify) {
+static void cynusNotify(NimBLERemoteCharacteristic*, uint8_t* data, size_t len, bool) {
     Serial.print("[CYNUS RX] ");
     for (size_t i = 0; i < len; ++i) {
         char c = (char)data[i];
@@ -778,7 +692,7 @@ static void cynusNotify(NimBLERemoteCharacteristic* characteristic, uint8_t* dat
 }
 
 class CClientCB : public NimBLEClientCallbacks {
-    void onDisconnect(NimBLEClient* client, int reason) override {
+    void onDisconnect(NimBLEClient*, int reason) override {
         Serial.printf("[CYNUS] disconnected %d\n", reason);
         cynusReady = false;
         cynusChr = nullptr;
@@ -797,7 +711,7 @@ class ScanCB : public NimBLEScanCallbacks {
         cynusDev = dev;
         cynusConnectPending = true;
     }
-    void onScanEnd(const NimBLEScanResults& results, int reason) override {
+    void onScanEnd(const NimBLEScanResults&, int) override {
         if (!cynusConnectPending && !cynusReady) {
             delay(500);
             startCynusScan();
@@ -853,6 +767,7 @@ static bool connectCynus() {
     boardSyncRequestPending = false;
     boardScanPending = false;
     boardSynced = false;
+    engineSide = ENGINE_SIDE_UNKNOWN;
     if (sendCynus("set internal engine off\n")) {
         Serial.println("[CYNUS] internal engine OFF command #1 sent");
         engineOffSentAt = millis();
@@ -911,6 +826,7 @@ static void recoverCynusLoss(const char* source) {
     bufferedFen = "";
     lastFenSentToChessLink = "";
     correctionFenCandidate = "";
+    engineSide = ENGINE_SIDE_UNKNOWN;
     boardSyncPurpose = BOARD_SYNC_NONE;
     boardSyncRequestPending = false;
     boardScanPending = false;
@@ -1010,7 +926,7 @@ void setup() {
     Serial.begin(115200);
     delay(1500);
     Serial.println();
-    Serial.println("=== CynusLink Robust Core Baseline v2.8 ===");
+    Serial.println("=== CynusLink Robust Core Baseline v2.9 ===");
     memset(ee, 0, sizeof(ee));
     ee[0] = 0x00;
     ee[1] = 0x14;
