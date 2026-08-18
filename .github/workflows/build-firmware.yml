@@ -1,0 +1,68 @@
+name: Build CynusLink firmware
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/main.ccp'
+      - 'platformio.ini'
+      - '.github/workflows/build-firmware.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Prepare PlatformIO source
+        run: cp src/main.ccp src/main.cpp
+
+      - name: Build firmware
+        run: pio run -e esp32-s3-devkitc-1
+
+      - name: Prepare Web Flasher files
+        run: |
+          cp .pio/build/esp32-s3-devkitc-1/firmware.bin docs/CynusLink-firmware.bin
+          cp .pio/build/esp32-s3-devkitc-1/bootloader.bin docs/bootloader.bin
+          cp .pio/build/esp32-s3-devkitc-1/partitions.bin docs/partitions.bin
+          python - <<'PY'
+          import json
+          p='docs/manifest.json'
+          d=json.load(open(p))
+          d['version']='v2.11'
+          open(p,'w').write(json.dumps(d, indent=2) + '\n')
+          PY
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CynusLink-v2.11-webflasher
+          path: |
+            docs/CynusLink-firmware.bin
+            docs/bootloader.bin
+            docs/partitions.bin
+            docs/manifest.json
+
+      - name: Publish firmware to Web Flasher
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/CynusLink-firmware.bin docs/bootloader.bin docs/partitions.bin docs/manifest.json
+          if git diff --cached --quiet; then
+            echo 'No firmware changes to commit'
+          else
+            git commit -m 'Build CynusLink v2.11 firmware [skip ci]'
+            git push
+          fi
