@@ -1,6 +1,6 @@
 {
   "name": "CynusLink",
-  "version": "development",
+  "version": "v2.11",
   "new_install_prompt_erase": true,
   "builds": [
     {
