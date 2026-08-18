@@ -77,6 +77,7 @@ static String clBuf;
 // NimBLE callbacks run on the nimble_host task.
 // Keep callbacks small and process complete ChessLink frames in loop().
 static volatile bool clProcessPending = false;
+static volatile bool clStatusPending = false;
 
 // --------------------
 // Board
@@ -437,10 +438,7 @@ static void sendCL(const String& payload) {
             ok ? "OK" : "FAILED"
         );
 
-        // Gerhard Kalab/python-mchess ChessLink transport is deliberately
-        // conservative between BLE writes. Give fragmented status frames
-        // enough time to be reassembled reliably by the client.
-        delay(40);
+        delay(8);
     }
 }
 
@@ -1269,7 +1267,9 @@ static void cynusBytes(
                         // controls automatic reports. Mode 001 disables them;
                         // every other mode allows an automatic 's...' report.
                         if (autoReport()) {
-                            sendStatus();
+                            // Defer ChessLink notification out of the Cynus
+                            // NimBLE callback to avoid cross-role BLE re-entrancy.
+                            clStatusPending = true;
                         } else {
                             Serial.println(
                                 "[CHESS] automatic reports disabled by E2ROM 02; waiting for S"
@@ -1839,7 +1839,7 @@ void setup() {
 
     Serial.println();
     Serial.println(
-        "=== CynusLink Robust Core Baseline v2.4 ==="
+        "=== CynusLink Robust Core Baseline v2.5 ==="
     );
 
     memset(ee, 0, sizeof(ee));
@@ -1891,6 +1891,11 @@ void loop() {
     if (clProcessPending) {
         clProcessPending = false;
         processCL();
+    }
+
+    if (clStatusPending) {
+        clStatusPending = false;
+        sendStatus();
     }
 
     processSupervision();
