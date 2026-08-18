@@ -87,6 +87,15 @@ static char board64[65] = ".....................................................
 static String fenNow = "";
 static bool boardSynced = false;
 
+// Last physical position actually published to ChessLink/PicoChess.
+// Used to suppress duplicate manual correction scans.
+static String lastFenSentToChessLink = "";
+
+// During WAIT_ENGINE_MOVE a user-triggered Cynus scan may correct a
+// previously misread position. Buffer that FEN until the following
+// "get move" confirms the scan cycle is complete.
+static String correctionFenCandidate = "";
+
 static constexpr const char* START_FEN =
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 
@@ -463,6 +472,7 @@ static void sendStatus() {
     Serial.println(board64);
 
     sendCL(p);
+    lastFenSentToChessLink = fenNow;
 }
 
 static bool autoReport() {
@@ -1144,9 +1154,46 @@ static void cynusBytes(
 
                     sendCynus("get fen\n");
                 } else {
-                    Serial.println(
-                        "[MOVE] get move received while already waiting for engine; ignored"
-                    );
+                    // We are already waiting for PicoChess. A user may have
+                    // corrected a bad scan and pressed the Cynus scan button.
+                    // The FEN arrived just before this "get move"; publish it
+                    // only now, after the scan cycle is complete.
+                    if (
+                        correctionFenCandidate.length() &&
+                        correctionFenCandidate != lastFenSentToChessLink
+                    ) {
+                        if (fen2board(correctionFenCandidate)) {
+                            fenNow = correctionFenCandidate;
+                            boardSynced = true;
+
+                            Serial.printf(
+                                "[CORRECTION] accepted rescanned FEN %s\n",
+                                fenNow.c_str()
+                            );
+
+                            Serial.printf(
+                                "[CORRECTION] ChessLink %s\n",
+                                board64
+                            );
+
+                            if (autoReport()) {
+                                clStatusPending = true;
+                                Serial.println(
+                                    "[CORRECTION] corrected board queued for PicoChess"
+                                );
+                            } else {
+                                Serial.println(
+                                    "[CORRECTION] automatic reports disabled; waiting for S"
+                                );
+                            }
+                        }
+                    } else {
+                        Serial.println(
+                            "[MOVE] get move while waiting for engine; no changed correction FEN"
+                        );
+                    }
+
+                    correctionFenCandidate = "";
                 }
 
                 continue;
@@ -1277,6 +1324,34 @@ static void cynusBytes(
                         }
 
                         setMoveCycle(WAIT_ENGINE_MOVE);
+
+                        continue;
+                    }
+
+                    // While waiting for PicoChess, a FEN from a manual
+                    // Cynus rescan is a correction candidate. Do not publish it
+                    // immediately: wait for the following "get move" so camera
+                    // intermediate frames cannot leak to PicoChess.
+                    if (
+                        state == RUNNING &&
+                        clConnected &&
+                        moveCycle == WAIT_ENGINE_MOVE
+                    ) {
+                        correctionFenCandidate = bufferedFen;
+
+                        if (
+                            correctionFenCandidate !=
+                            lastFenSentToChessLink
+                        ) {
+                            Serial.printf(
+                                "[CORRECTION] candidate FEN buffered %s\n",
+                                correctionFenCandidate.c_str()
+                            );
+                        } else {
+                            Serial.println(
+                                "[CORRECTION] duplicate FEN buffered; no resend needed"
+                            );
+                        }
 
                         continue;
                     }
@@ -1631,6 +1706,8 @@ static void recoverCynusLoss(const char* source) {
     boardSynced = false;
     fenNow = "";
     bufferedFen = "";
+    lastFenSentToChessLink = "";
+    correctionFenCandidate = "";
     boardSyncPurpose = BOARD_SYNC_NONE;
     boardSyncRequestPending = false;
     boardScanPending = false;
@@ -1839,7 +1916,7 @@ void setup() {
 
     Serial.println();
     Serial.println(
-        "=== CynusLink Robust Core Baseline v2.5 ==="
+        "=== CynusLink Robust Core Baseline v2.6 ==="
     );
 
     memset(ee, 0, sizeof(ee));
