@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'src/main.ccp'
+      - 'src/main.cpp'
       - 'platformio.ini'
       - '.github/workflows/build-firmware.yml'
   workflow_dispatch:
@@ -25,9 +25,6 @@ jobs:
 
       - name: Install PlatformIO
         run: pip install platformio
-
-      - name: Prepare PlatformIO source
-        run: cp src/main.ccp src/main.cpp
 
       - name: Build firmware
         run: pio run -e esp32-s3-devkitc-1
@@ -66,5 +63,3 @@ jobs:
             git commit -m 'Build CynusLink v2.11 firmware [skip ci]'
             git push
           fi
-
-# build trigger: v2.11
