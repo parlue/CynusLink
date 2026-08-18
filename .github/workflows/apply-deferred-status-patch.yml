@@ -1,0 +1,73 @@
+name: Apply deferred ChessLink status patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-deferred-status-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch src/main.ccp
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/main.ccp')
+          text = p.read_text(encoding='utf-8')
+
+          def rep(old, new, label):
+              global text
+              if old not in text:
+                  raise SystemExit(f'anchor not found: {label}')
+              text = text.replace(old, new, 1)
+
+          rep(
+              'static volatile bool clProcessPending = false;\n',
+              'static volatile bool clProcessPending = false;\nstatic volatile bool clStatusPending = false;\n',
+              'status pending declaration'
+          )
+
+          rep(
+              '''                        if (autoReport()) {\n                            sendStatus();\n                        } else {\n''',
+              '''                        if (autoReport()) {\n                            // Defer ChessLink notification out of the Cynus\n                            // NimBLE callback to avoid cross-role BLE re-entrancy.\n                            clStatusPending = true;\n                        } else {\n''',
+              'defer human auto report'
+          )
+
+          rep(
+              '''    if (clProcessPending) {\n        clProcessPending = false;\n        processCL();\n    }\n\n    processSupervision();\n''',
+              '''    if (clProcessPending) {\n        clProcessPending = false;\n        processCL();\n    }\n\n    if (clStatusPending) {\n        clStatusPending = false;\n        sendStatus();\n    }\n\n    processSupervision();\n''',
+              'loop deferred status'
+          )
+
+          rep(
+              '''        // Gerhard Kalab/python-mchess ChessLink transport is deliberately\n        // conservative between BLE writes. Give fragmented status frames\n        // enough time to be reassembled reliably by the client.\n        delay(40);\n''',
+              '''        delay(8);\n''',
+              'restore fragment delay'
+          )
+
+          text = text.replace(
+              '=== CynusLink Robust Core Baseline v2.4 ===',
+              '=== CynusLink Robust Core Baseline v2.5 ===',
+              1
+          )
+
+          p.write_text(text, encoding='utf-8')
+          Path('.github/workflows/apply-deferred-status-patch.yml').unlink()
+          PY
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "CynusLink Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/main.ccp .github/workflows/apply-deferred-status-patch.yml
+          git commit -m "Defer ChessLink status send out of Cynus callback"
+          git push
