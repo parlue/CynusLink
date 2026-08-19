@@ -79,6 +79,8 @@ static uint32_t nextCynusScanAt = 0;
 static uint32_t boardSyncRequestAt = 0;
 static bool boardSyncRequestPending = false;
 static bool boardScanPending = false;
+static bool startupFreshFenExpected = false;
+static bool startupCorrectionMode = false;
 static uint32_t boardScanGetFenAt = 0;
 static constexpr uint32_t BOARD_SCAN_WAIT_MS = 1000;
 static uint32_t lastLinkHealthCheckAt = 0;
@@ -338,7 +340,7 @@ static bool handleSoundConfigFen(String f) {
     setMoveCycle(WAIT_HUMAN_MOVE);
     displayPlayPending = false;
     cynusDisplay(soundOn ? "snd on" : "snd off");
-    schedulePlayDisplay(2000);
+    schedulePlayDisplay(3500);
     Serial.printf("[SOUND] sound %s selected with black king; config FEN suppressed from ChessLink\n", soundOn ? "ON" : "OFF");
     return true;
 }
@@ -603,22 +605,34 @@ static void cynusBytes(const uint8_t* data, size_t len) {
             if (line.startsWith("fen:")) {
                 String f=line.substring(4); f.trim();
                 if (initialStartupComplete && state==RUNNING && clConnected && moveCycle==WAIT_HUMAN_MOVE && handleSoundConfigFen(f)) continue;
+
+                if (state==SYNC_BOARD && cynusReady && boardSyncPurpose==BOARD_SYNC_STARTUP && !startupFreshFenExpected && !startupCorrectionMode) {
+                    Serial.printf("[STARTUP] ignoring pre-request FEN: %s\n", f.c_str());
+                    continue;
+                }
+
                 if (fen2board(f)) {
                     bufferedFen=f; Serial.printf("[BOARD] buffered FEN %s\n",bufferedFen.c_str());
                     if (state==SYNC_BOARD && cynusReady && boardSyncPurpose!=BOARD_SYNC_NONE) {
                         String placement=bufferedFen; int sp=placement.indexOf(' '); if (sp>=0) placement=placement.substring(0,sp);
                         int orientation=orientationOfFen(placement);
                         if (boardSyncPurpose==BOARD_SYNC_STARTUP && orientation<0) {
+                            startupFreshFenExpected=false;
+                            startupCorrectionMode=true;
                             Serial.printf("[STARTUP] board not ready: %s\n",bufferedFen.c_str());
                             Serial.println("[STARTUP] waiting for initial position; correct board and press Cynus scan");
                             continue;
+                        }
+                        if (boardSyncPurpose==BOARD_SYNC_STARTUP) {
+                            startupFreshFenExpected=false;
+                            startupCorrectionMode=false;
                         }
                         fenNow=bufferedFen; boardSynced=true;
                         BoardSyncPurpose completedPurpose=boardSyncPurpose; boardSyncPurpose=BOARD_SYNC_NONE;
                         if (completedPurpose==BOARD_SYNC_STARTUP) {
                             initialStartupComplete=true;
                             configureStartOrientation(orientation==1);
-                            Serial.printf("[STARTUP] valid %s initial position confirmed\n", orientation==1?"flipped":"normal");
+                            Serial.printf("[STARTUP] valid %s initial position confirmed from fresh FEN\n", orientation==1?"flipped":"normal");
                         }
                         if (!clConnected) {
                             setState(WAIT_CHESSLINK);
@@ -694,6 +708,7 @@ static bool connectCynus() {
     cynusReady=true; Serial.printf("[CYNUS] connected %s\n",cynusDev->getName().c_str());
     cynusExternalModeConfirmed=false; cynusEngineOffCommandSent=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false;
     boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; boardSynced=false; engineSide=ENGINE_SIDE_UNKNOWN;
+    startupFreshFenExpected=false; startupCorrectionMode=false; lastStartupFenEvaluated="";
     if (sendCynus("set internal engine off\n")) { Serial.println("[CYNUS] internal engine OFF command #1 sent"); engineOffSentAt=millis(); cynusEngineOffSecondSendPending=true; chessAdvertisingPendingAfterEngineOff=true; }
     return true;
 }
@@ -703,6 +718,7 @@ static void stopChessLinkAdvertising() { if (!clServerStarted) return; chessAdve
 static void requestBoardSync(BoardSyncPurpose purpose, uint32_t delayMs) {
     if (!cynusReady) return;
     boardSyncPurpose=purpose; boardSynced=false; publishNextFenToChessLink=false; cynusWaitingForMove=false; setMoveCycle(WAIT_HUMAN_MOVE); setState(SYNC_BOARD);
+    if (purpose==BOARD_SYNC_STARTUP) { startupFreshFenExpected=false; startupCorrectionMode=false; lastStartupFenEvaluated=""; }
     boardSyncRequestPending=true; boardSyncRequestAt=millis()+delayMs; Serial.printf("[SYNC] board request queued purpose=%s\n",purpose==BOARD_SYNC_STARTUP?"STARTUP":"RECOVERY");
 }
 
@@ -715,6 +731,7 @@ static void recoverChessLinkLoss(const char*) {
 static void recoverCynusLoss(const char*) {
     cynusReady=false; cynusChr=nullptr; cynusDev=nullptr; boardSynced=false; fenNow=""; bufferedFen=""; lastFenSentToChessLink=""; correctionFenCandidate="";
     displayPlayPending=false; engineSide=ENGINE_SIDE_UNKNOWN; boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; cynusWaitingForMove=false;
+    startupFreshFenExpected=false; startupCorrectionMode=false;
     publishNextFenToChessLink=false; cynusEngineOffCommandSent=false; cynusExternalModeConfirmed=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false;
     stopChessLinkAdvertising(); clConnected=false; clNotify=false; clConnHandle=BLE_HS_CONN_HANDLE_NONE; clBuf=""; setState(SEARCH_CYNUS); nextCynusScanAt=millis()+500;
 }
@@ -735,7 +752,12 @@ static void processSupervision() {
     }
     if (boardScanPending && cynusReady && (int32_t)(millis()-boardScanGetFenAt)>=0) {
         boardScanPending=false; Serial.println("[SYNC] board scan complete; requesting fresh FEN");
-        if (!sendCynus("get fen\n")) { boardSyncRequestPending=true; boardSyncRequestAt=millis()+500; }
+        if (sendCynus("get fen\n")) {
+            if (boardSyncPurpose==BOARD_SYNC_STARTUP) {
+                startupFreshFenExpected=true;
+                Serial.println("[STARTUP] fresh FEN armed; waiting for get fen response");
+            }
+        } else { boardSyncRequestPending=true; boardSyncRequestAt=millis()+500; }
     }
     if (millis()-lastLinkHealthCheckAt>=LINK_HEALTH_CHECK_MS) {
         lastLinkHealthCheckAt=millis();
