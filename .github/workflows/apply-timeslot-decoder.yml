@@ -1,0 +1,138 @@
+name: Apply Millennium timeslot decoder patch
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-timeslot-decoder.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch only Millennium LED decoder
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('src/main.cpp')
+          text = path.read_text()
+          pattern = re.compile(r'static bool extractPhasedMoveFromLCommand\(String& uci\) \{.*?\n\}\n\nstatic bool extractMoveFromLCommand', re.S)
+          replacement = r'''static bool extractTimeslotMoveFromLCommand(String& uci) {
+    if (engineSide == ENGINE_SIDE_UNKNOWN) return false;
+
+    auto exactSquareForBit = [](uint8_t bitMask, int& square) -> bool {
+        bool observed[81] = {false};
+        int observedCount = 0;
+        for (int i = 0; i < 81; ++i) {
+            observed[i] = (led[i] & bitMask) != 0;
+            if (observed[i]) ++observedCount;
+        }
+        if (observedCount != 4) return false;
+
+        int found = -1;
+        for (int sq = 0; sq < 64; ++sq) {
+            int file = sq % 8, rankTop = sq / 8;
+            bool expected[81] = {false};
+            expected[file * 9 + rankTop] = true;
+            expected[(file + 1) * 9 + rankTop] = true;
+            expected[file * 9 + rankTop + 1] = true;
+            expected[(file + 1) * 9 + rankTop + 1] = true;
+            bool same = true;
+            for (int i = 0; i < 81; ++i) {
+                if (expected[i] != observed[i]) { same = false; break; }
+            }
+            if (!same) continue;
+            if (found >= 0) return false;
+            found = sq;
+        }
+        if (found < 0) return false;
+        square = found;
+        return true;
+    };
+
+    // Millennium show_deltas(): each half-move uses two time slots:
+    // source bits 7,5,3,1 and destination bits 6,4,2,0.
+    for (int ply = 0; ply < 4; ++ply) {
+        int source = -1, destination = -1;
+        uint8_t sourceBit = (uint8_t)(1U << (7 - 2 * ply));
+        uint8_t destinationBit = (uint8_t)(1U << (6 - 2 * ply));
+        if (!exactSquareForBit(sourceBit, source) || !exactSquareForBit(destinationBit, destination)) continue;
+        if (!plausibleBoardMove(source, destination, engineSide)) continue;
+        uci = squareName(source % 8, source / 8) + squareName(destination % 8, destination / 8);
+        Serial.printf("[CHESS] timeslot LED decoder selected ply=%d %s\n", ply, uci.c_str());
+        return true;
+    }
+    return false;
+}
+
+static bool extractPhasedMoveFromLCommand(String& uci) {
+    if (extractTimeslotMoveFromLCommand(uci)) return true;
+    if (engineSide == ENGINE_SIDE_UNKNOWN) return false;
+    int bestSource = -1, bestDestination = -1, bestScore = -999, bestCount = 0;
+    for (int source = 0; source < 64; ++source) {
+        char piece = board64[source];
+        EngineSide sourceSide = (piece >= 'A' && piece <= 'Z') ? ENGINE_SIDE_WHITE : ((piece >= 'a' && piece <= 'z') ? ENGINE_SIDE_BLACK : ENGINE_SIDE_UNKNOWN);
+        if (sourceSide != engineSide) continue;
+        int sf = source % 8, sr = source / 8;
+        const uint8_t sourceCorners[4] = { ledValue(sf, sr), ledValue(sf + 1, sr), ledValue(sf, sr + 1), ledValue(sf + 1, sr + 1) };
+        int sourceLow = 0, sourceHigh = 0;
+        for (uint8_t v : sourceCorners) {
+            if (v & 0x0F) ++sourceLow;
+            if (v & 0xF0) ++sourceHigh;
+        }
+        if (sourceLow != 4 || sourceHigh != 0) continue;
+
+        for (int destination = 0; destination < 64; ++destination) {
+            if (!plausibleBoardMove(source, destination, engineSide)) continue;
+            int df = destination % 8, dr = destination / 8;
+            if ((char)tolower((unsigned char)piece) == 'k' && sr == dr && abs(df - sf) == 2) continue;
+            const uint8_t destinationCorners[4] = { ledValue(df, dr), ledValue(df + 1, dr), ledValue(df, dr + 1), ledValue(df + 1, dr + 1) };
+            int destinationLow = 0, destinationHigh = 0;
+            for (uint8_t v : destinationCorners) {
+                if (v & 0x0F) ++destinationLow;
+                if (v & 0xF0) ++destinationHigh;
+            }
+            if (destinationHigh < 2) continue;
+            int score = destinationHigh * 4 - destinationLow;
+            if (score > bestScore) {
+                bestScore = score;
+                bestSource = source;
+                bestDestination = destination;
+                bestCount = 1;
+            } else if (score == bestScore) {
+                ++bestCount;
+            }
+        }
+    }
+    if (bestSource < 0 || bestCount != 1) {
+        if (bestSource >= 0) Serial.printf("[CHESS] phased LED pattern ambiguous: best score=%d candidates=%d\n", bestScore, bestCount);
+        return false;
+    }
+    uci = squareName(bestSource % 8, bestSource / 8) + squareName(bestDestination % 8, bestDestination / 8);
+    Serial.printf("[CHESS] phased LED fallback selected %s (score=%d)\n", uci.c_str(), bestScore);
+    return true;
+}
+
+static bool extractMoveFromLCommand'''
+
+          new_text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'expected exactly one decoder block, replaced {count}')
+          path.write_text(new_text)
+          PY
+
+          git diff --check
+          git diff -- src/main.cpp
+          git config user.name "CynusLink Decoder Patch"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/main.cpp
+          git commit -m "Decode Millennium multi-ply LED timeslots safely"
+          git push origin HEAD:main
