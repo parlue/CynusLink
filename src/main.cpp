@@ -494,6 +494,53 @@ static String inferMoveDisplayText(const String& oldFen, const String& newFen) {
     return moveDisplayText(uci);
 }
 
+static bool plausibleBoardMove(int source, int destination, EngineSide requiredSide) {
+    if (source < 0 || source >= 64 || destination < 0 || destination >= 64 || source == destination) return false;
+    char piece = board64[source];
+    char target = board64[destination];
+    EngineSide side = (piece >= 'A' && piece <= 'Z') ? ENGINE_SIDE_WHITE : ((piece >= 'a' && piece <= 'z') ? ENGINE_SIDE_BLACK : ENGINE_SIDE_UNKNOWN);
+    if (side == ENGINE_SIDE_UNKNOWN || (requiredSide != ENGINE_SIDE_UNKNOWN && side != requiredSide)) return false;
+    if (target != '.') {
+        EngineSide targetSide = (target >= 'A' && target <= 'Z') ? ENGINE_SIDE_WHITE : ((target >= 'a' && target <= 'z') ? ENGINE_SIDE_BLACK : ENGINE_SIDE_UNKNOWN);
+        if (targetSide == side) return false;
+    }
+    int sf = source % 8, sr = source / 8, df = destination % 8, dr = destination / 8;
+    int dx = df - sf, dy = dr - sr, ax = abs(dx), ay = abs(dy);
+    auto clearPath = [&](int stepX, int stepY) {
+        int x = sf + stepX, y = sr + stepY;
+        while (x != df || y != dr) {
+            if (x < 0 || x > 7 || y < 0 || y > 7 || board64[y * 8 + x] != '.') return false;
+            x += stepX; y += stepY;
+        }
+        return true;
+    };
+    char p = (char)tolower((unsigned char)piece);
+    if (p == 'n') return (ax == 1 && ay == 2) || (ax == 2 && ay == 1);
+    if (p == 'k') return (ax <= 1 && ay <= 1) || (ay == 0 && ax == 2);
+    if (p == 'b') return ax == ay && ax > 0 && clearPath(dx > 0 ? 1 : -1, dy > 0 ? 1 : -1);
+    if (p == 'r') {
+        if (dx != 0 && dy != 0) return false;
+        return clearPath(dx == 0 ? 0 : (dx > 0 ? 1 : -1), dy == 0 ? 0 : (dy > 0 ? 1 : -1));
+    }
+    if (p == 'q') {
+        if (ax == ay && ax > 0) return clearPath(dx > 0 ? 1 : -1, dy > 0 ? 1 : -1);
+        if (dx == 0 || dy == 0) return clearPath(dx == 0 ? 0 : (dx > 0 ? 1 : -1), dy == 0 ? 0 : (dy > 0 ? 1 : -1));
+        return false;
+    }
+    if (p == 'p') {
+        int dir = side == ENGINE_SIDE_WHITE ? -1 : 1;
+        int startRank = side == ENGINE_SIDE_WHITE ? 6 : 1;
+        if (dx == 0 && target == '.') {
+            if (dy == dir) return true;
+            if (sr == startRank && dy == 2 * dir && board64[(sr + dir) * 8 + sf] == '.') return true;
+            return false;
+        }
+        if (ax == 1 && dy == dir && target != '.') return true;
+        return false;
+    }
+    return false;
+}
+
 static bool extractMoveFromLCommand(String& uci) {
     bool observed[81]; int observedCount = 0;
     for (int i = 0; i < 81; ++i) { observed[i] = led[i] != 0; if (observed[i]) ++observedCount; }
@@ -538,6 +585,12 @@ static bool extractMoveFromLCommand(String& uci) {
             source = aIsEngine ? a : b; destination = aIsEngine ? b : a;
         }
     } else return false;
+    if (!plausibleBoardMove(source, destination, engineSide)) {
+        Serial.printf("[CHESS] ignoring LED pattern %s-%s: not a plausible move for current board\n",
+                      squareName(source % 8, source / 8).c_str(),
+                      squareName(destination % 8, destination / 8).c_str());
+        return false;
+    }
     uci = squareName(source % 8, source / 8) + squareName(destination % 8, destination / 8);
     return true;
 }
