@@ -937,7 +937,9 @@ static bool connectCynus() {
     }
     cynusReady = true;
     Serial.printf("[CYNUS] connected %s\n", cynusDev->getName().c_str());
-    Serial.println("[DISPLAY] waiting for a valid initial board before ChessLink scan");
+    displayPlayPending = false;
+    cynusDisplay("B Scan");
+    Serial.println("[DISPLAY] B Scan: Cynus connected, preparing physical board scan");
     cynusExternalModeConfirmed = false;
     cynusEngineOffCommandSent = false;
     cynusEngineOffSecondSendPending = false;
@@ -972,12 +974,6 @@ static void requestBoardSync(BoardSyncPurpose purpose, uint32_t delayMs) {
     setMoveCycle(WAIT_HUMAN_MOVE);
     setState(SYNC_BOARD);
     boardSyncRequestPending = true;
-    if (purpose == BOARD_SYNC_STARTUP) {
-        displayPlayPending = false;
-        cynusDisplay("B Scan");
-        if (delayMs < 400) delayMs = 400;
-        Serial.println("[DISPLAY] B Scan: waiting before physical startup scan");
-    }
     boardSyncRequestAt = millis() + delayMs;
     Serial.printf("[SYNC] board request queued purpose=%s\n", purpose == BOARD_SYNC_STARTUP ? "STARTUP" : "RECOVERY");
 }
