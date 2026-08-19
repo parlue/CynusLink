@@ -24,6 +24,42 @@ jobs:
         with:
           python-version: '3.x'
 
+      - name: Integrate main_base into main.cpp
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          main = Path('src/main.cpp')
+          base = Path('src/main_base.inc')
+          if not base.exists():
+              print('main.cpp is already standalone')
+              raise SystemExit(0)
+
+          wrapper = main.read_text()
+          core = base.read_text()
+
+          marker = '#undef setup\n\n'
+          if marker not in wrapper:
+              raise SystemExit('Could not find wrapper split marker in src/main.cpp')
+          patch = wrapper.split(marker, 1)[1]
+
+          core = core.replace('void setup() {', 'static void cynuslinkCoreSetup() {', 1)
+          core = core.replace('void loop() {', 'static void cynuslinkCoreLoop() {', 1)
+
+          merged = core.rstrip() + '\n\n' + patch.lstrip()
+          main.write_text(merged)
+          base.unlink()
+          print('Integrated src/main_base.inc into standalone src/main.cpp')
+          PY
+
+          if ! git diff --quiet -- src/main.cpp src/main_base.inc; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add -A src/main.cpp src/main_base.inc
+            git commit -m 'Make main.cpp standalone [skip ci]'
+            git push
+          fi
+
       - name: Install PlatformIO
         run: pip install platformio
 
