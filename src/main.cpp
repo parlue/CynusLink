@@ -541,10 +541,58 @@ static bool plausibleBoardMove(int source, int destination, EngineSide requiredS
     return false;
 }
 
+static bool extractPhasedMoveFromLCommand(String& uci) {
+    if (engineSide == ENGINE_SIDE_UNKNOWN) return false;
+    int bestSource = -1, bestDestination = -1, bestScore = -999, bestCount = 0;
+    for (int source = 0; source < 64; ++source) {
+        char piece = board64[source];
+        EngineSide sourceSide = (piece >= 'A' && piece <= 'Z') ? ENGINE_SIDE_WHITE : ((piece >= 'a' && piece <= 'z') ? ENGINE_SIDE_BLACK : ENGINE_SIDE_UNKNOWN);
+        if (sourceSide != engineSide) continue;
+        int sf = source % 8, sr = source / 8;
+        const uint8_t sourceCorners[4] = { ledValue(sf, sr), ledValue(sf + 1, sr), ledValue(sf, sr + 1), ledValue(sf + 1, sr + 1) };
+        int sourceLow = 0, sourceHigh = 0;
+        for (uint8_t v : sourceCorners) {
+            if (v & 0x0F) ++sourceLow;
+            if (v & 0xF0) ++sourceHigh;
+        }
+        if (sourceLow != 4 || sourceHigh != 0) continue;
+
+        for (int destination = 0; destination < 64; ++destination) {
+            if (!plausibleBoardMove(source, destination, engineSide)) continue;
+            int df = destination % 8, dr = destination / 8;
+            if ((char)tolower((unsigned char)piece) == 'k' && sr == dr && abs(df - sf) == 2) continue;
+            const uint8_t destinationCorners[4] = { ledValue(df, dr), ledValue(df + 1, dr), ledValue(df, dr + 1), ledValue(df + 1, dr + 1) };
+            int destinationLow = 0, destinationHigh = 0;
+            for (uint8_t v : destinationCorners) {
+                if (v & 0x0F) ++destinationLow;
+                if (v & 0xF0) ++destinationHigh;
+            }
+            if (destinationHigh < 2) continue;
+            int score = destinationHigh * 4 - destinationLow;
+            if (score > bestScore) {
+                bestScore = score;
+                bestSource = source;
+                bestDestination = destination;
+                bestCount = 1;
+            } else if (score == bestScore) {
+                ++bestCount;
+            }
+        }
+    }
+    if (bestSource < 0 || bestCount != 1) {
+        if (bestSource >= 0) Serial.printf("[CHESS] phased LED pattern ambiguous: best score=%d candidates=%d\n", bestScore, bestCount);
+        return false;
+    }
+    uci = squareName(bestSource % 8, bestSource / 8) + squareName(bestDestination % 8, bestDestination / 8);
+    Serial.printf("[CHESS] phased LED fallback selected %s (score=%d)\n", uci.c_str(), bestScore);
+    return true;
+}
+
 static bool extractMoveFromLCommand(String& uci) {
     bool observed[81]; int observedCount = 0;
     for (int i = 0; i < 81; ++i) { observed[i] = led[i] != 0; if (observed[i]) ++observedCount; }
-    if (observedCount < 6 || observedCount > 8) return false;
+    if (observedCount < 6) return false;
+    if (observedCount > 8) return extractPhasedMoveFromLCommand(uci);
     auto addSquareCorners = [](bool mask[81], int file, int rankTop) {
         mask[file * 9 + rankTop] = true; mask[(file + 1) * 9 + rankTop] = true; mask[file * 9 + rankTop + 1] = true; mask[(file + 1) * 9 + rankTop + 1] = true;
     };
