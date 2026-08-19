@@ -352,7 +352,7 @@ static void sendCL(const String& payload) {
     String full = payload + hx(xsum(payload));
     std::vector<uint8_t> bytes;
     bytes.reserve(full.length());
-    for (size_t i = 0; i < full.length(); ++i) bytes.push_back((uint8_t)s[i]);
+    for (size_t i = 0; i < full.length(); ++i) bytes.push_back((uint8_t)full[i]);
     Serial.printf("[CHESS TX] %s\n", full.c_str());
     Serial.print("[CHESS TX HEX]");
     for (uint8_t b : bytes) Serial.printf(" %02X", b);
