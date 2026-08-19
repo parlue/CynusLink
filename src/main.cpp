@@ -541,6 +541,43 @@ static bool plausibleBoardMove(int source, int destination, EngineSide requiredS
     return false;
 }
 
+static bool extractTimeslotDiagnosticMove(String& uci, int& plyOut) {
+    if (engineSide == ENGINE_SIDE_UNKNOWN) return false;
+    for (int ply = 0; ply < 4; ++ply) {
+        const uint8_t sourceMask = (uint8_t)(1U << (7 - ply * 2));
+        const uint8_t destinationMask = (uint8_t)(1U << (6 - ply * 2));
+        int bestSource = -1, bestDestination = -1, candidates = 0;
+        for (int source = 0; source < 64; ++source) {
+            char piece = board64[source];
+            EngineSide side = (piece >= 'A' && piece <= 'Z') ? ENGINE_SIDE_WHITE : ((piece >= 'a' && piece <= 'z') ? ENGINE_SIDE_BLACK : ENGINE_SIDE_UNKNOWN);
+            if (side != engineSide) continue;
+            int sf = source % 8, sr = source / 8;
+            const uint8_t sc[4] = { ledValue(sf, sr), ledValue(sf + 1, sr), ledValue(sf, sr + 1), ledValue(sf + 1, sr + 1) };
+            bool sourceMarked = true;
+            for (uint8_t v : sc) if ((v & sourceMask) == 0) { sourceMarked = false; break; }
+            if (!sourceMarked) continue;
+            for (int destination = 0; destination < 64; ++destination) {
+                if (!plausibleBoardMove(source, destination, engineSide)) continue;
+                int df = destination % 8, dr = destination / 8;
+                const uint8_t dc[4] = { ledValue(df, dr), ledValue(df + 1, dr), ledValue(df, dr + 1), ledValue(df + 1, dr + 1) };
+                bool destinationMarked = true;
+                for (uint8_t v : dc) if ((v & destinationMask) == 0) { destinationMarked = false; break; }
+                if (!destinationMarked) continue;
+                bestSource = source;
+                bestDestination = destination;
+                ++candidates;
+            }
+        }
+        if (candidates == 1) {
+            uci = squareName(bestSource % 8, bestSource / 8) + squareName(bestDestination % 8, bestDestination / 8);
+            plyOut = ply;
+            return true;
+        }
+        if (candidates > 1) Serial.printf("[CHESS LED DIAG] timeslot ply=%d ambiguous candidates=%d\n", ply, candidates);
+    }
+    return false;
+}
+
 static bool extractPhasedMoveFromLCommand(String& uci) {
     if (engineSide == ENGINE_SIDE_UNKNOWN) return false;
     int bestSource = -1, bestDestination = -1, bestScore = -999, bestCount = 0;
@@ -670,7 +707,16 @@ static void handleCL(const String& f) {
             uint8_t slot; if (!hb(f[1], f[2], slot)) break;
             bool ok = true; for (int i=0;i<81;++i) if (!hb(f[3+i*2],f[4+i*2],led[i])) {ok=false;break;}
             if (!ok) break; sendCL("l");
-            String uci; if (extractMoveFromLCommand(uci) && cynusWaitingForMove) {
+            String timeslotUci; int timeslotPly = -1;
+            bool timeslotOk = extractTimeslotDiagnosticMove(timeslotUci, timeslotPly);
+            String uci; bool legacyOk = extractMoveFromLCommand(uci);
+            if (timeslotOk || legacyOk) {
+                Serial.printf("[CHESS LED DIAG] legacy=%s timeslot=%s ply=%d\n",
+                              legacyOk ? uci.c_str() : "-",
+                              timeslotOk ? timeslotUci.c_str() : "-",
+                              timeslotOk ? timeslotPly : -1);
+            }
+            if (legacyOk && cynusWaitingForMove) {
                 String displayMove = moveDisplayText(uci); if (displayMove.length()) cynusDisplay(displayMove.c_str());
                 String cmd = "move " + uci + "\n";
                 if (sendCynus(cmd.c_str())) { cynusWaitingForMove=false; setMoveCycle(WAIT_ROBOT_POSITION); }
