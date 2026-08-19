@@ -352,7 +352,7 @@ static void sendCL(const String& payload) {
     String full = payload + hx(xsum(payload));
     std::vector<uint8_t> bytes;
     bytes.reserve(full.length());
-    for (size_t i = 0; i < full.length(); ++i) bytes.push_back((uint8_t)full[i]);
+    for (size_t i = 0; i < full.length(); ++i) bytes.push_back((uint8_t)s[i]);
     Serial.printf("[CHESS TX] %s\n", full.c_str());
     Serial.print("[CHESS TX HEX]");
     for (uint8_t b : bytes) Serial.printf(" %02X", b);
@@ -596,6 +596,17 @@ static void cynusBytes(const uint8_t* data, size_t len) {
         char c=(char)data[i];
         if (c=='\n') {
             String line=cynusLine; cynusLine=""; line.trim(); Serial.printf("[CYNUS LINE] %s\n",line.c_str());
+
+            if (line.startsWith("promotions:") && state==SYNC_BOARD && cynusReady && boardSyncPurpose==BOARD_SYNC_STARTUP && startupCorrectionMode && !startupFreshFenExpected) {
+                Serial.println("[STARTUP] manual correction scan detected; requesting Cynus board scan");
+                if (sendCynus("scan board\n")) {
+                    startupFreshFenExpected=true;
+                    Serial.println("[STARTUP] correction scan started; waiting for Cynus scan FEN");
+                } else {
+                    Serial.println("[STARTUP] correction scan request failed; waiting for next manual scan");
+                }
+                continue;
+            }
 
             if (line.equalsIgnoreCase("get move")) {
                 if (!(cynusReady && clConnected)) {
