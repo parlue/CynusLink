@@ -639,6 +639,10 @@ static void cynusBytes(const uint8_t* data, size_t len) {
 
             if (line.startsWith("fen:")) {
                 String f=line.substring(4); f.trim();
+                if (state==SYNC_BOARD && cynusReady && boardSyncPurpose==BOARD_SYNC_STARTUP && startupCorrectionMode && boardSyncRequestPending) {
+                    boardSyncRequestPending=false;
+                    Serial.println("[STARTUP] manual correction FEN received; queued fallback scan cancelled");
+                }
                 if (initialStartupComplete && state==RUNNING && clConnected && moveCycle==WAIT_HUMAN_MOVE && handleSoundConfigFen(f)) continue;
 
                 if (state==SYNC_BOARD && cynusReady && boardSyncPurpose==BOARD_SYNC_STARTUP && !startupFreshFenExpected && !startupCorrectionMode) {
@@ -665,6 +669,8 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                                 continue;
                             }
 
+                            boardSyncRequestPending=false;
+                            boardScanPending=false;
                             if (!configureStartOrientation(orientation==1)) {
                                 boardSynced=false;
                                 Serial.println("[STARTUP] flip command failed; staying in Cynus board validation");
@@ -848,7 +854,11 @@ static void processSupervision() {
         if (cynusReady && boardSynced && state==WAIT_CHESSLINK) { chessAdvertisingAllowed=false; engineSide = startOrientationFlipped ? ENGINE_SIDE_WHITE : ENGINE_SIDE_BLACK; setState(RUNNING); setMoveCycle(startOrientationFlipped?WAIT_ENGINE_MOVE:WAIT_HUMAN_MOVE); cynusDisplay("Connect"); }
         else chessRejectEventPending=true;
     }
-    if (boardSyncRequestPending && cynusReady && (int32_t)(millis()-boardSyncRequestAt)>=0) {
+    if (boardSyncRequestPending && (state!=SYNC_BOARD || boardSyncPurpose==BOARD_SYNC_NONE)) {
+        boardSyncRequestPending=false;
+        Serial.println("[SYNC] stale board scan request cancelled");
+    }
+    if (boardSyncRequestPending && cynusReady && state==SYNC_BOARD && boardSyncPurpose!=BOARD_SYNC_NONE && (int32_t)(millis()-boardSyncRequestAt)>=0) {
         boardSyncRequestPending=false; Serial.println("[SYNC] starting physical board scan");
         if (sendCynus("scan board\n")) {
             if (boardSyncPurpose==BOARD_SYNC_STARTUP) { boardScanPending=false; startupFreshFenExpected=true; Serial.println("[STARTUP] scan started; waiting for Cynus scan FEN"); }
