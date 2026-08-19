@@ -541,54 +541,7 @@ static bool plausibleBoardMove(int source, int destination, EngineSide requiredS
     return false;
 }
 
-static bool extractTimeslotMoveFromLCommand(String& uci) {
-    if (engineSide == ENGINE_SIDE_UNKNOWN) return false;
-
-    auto exactSquareForBit = [](uint8_t bitMask, int& square) -> bool {
-        bool observed[81] = {false};
-        int observedCount = 0;
-        for (int i = 0; i < 81; ++i) {
-            observed[i] = (led[i] & bitMask) != 0;
-            if (observed[i]) ++observedCount;
-        }
-        if (observedCount != 4) return false;
-
-        int found = -1;
-        for (int sq = 0; sq < 64; ++sq) {
-            int file = sq % 8, rankTop = sq / 8;
-            bool expected[81] = {false};
-            expected[file * 9 + rankTop] = true;
-            expected[(file + 1) * 9 + rankTop] = true;
-            expected[file * 9 + rankTop + 1] = true;
-            expected[(file + 1) * 9 + rankTop + 1] = true;
-            bool same = true;
-            for (int i = 0; i < 81; ++i) {
-                if (expected[i] != observed[i]) { same = false; break; }
-            }
-            if (!same) continue;
-            if (found >= 0) return false;
-            found = sq;
-        }
-        if (found < 0) return false;
-        square = found;
-        return true;
-    };
-
-    for (int ply = 0; ply < 4; ++ply) {
-        int source = -1, destination = -1;
-        uint8_t sourceBit = (uint8_t)(1U << (7 - 2 * ply));
-        uint8_t destinationBit = (uint8_t)(1U << (6 - 2 * ply));
-        if (!exactSquareForBit(sourceBit, source) || !exactSquareForBit(destinationBit, destination)) continue;
-        if (!plausibleBoardMove(source, destination, engineSide)) continue;
-        uci = squareName(source % 8, source / 8) + squareName(destination % 8, destination / 8);
-        Serial.printf("[CHESS] timeslot LED decoder selected ply=%d %s\n", ply, uci.c_str());
-        return true;
-    }
-    return false;
-}
-
 static bool extractPhasedMoveFromLCommand(String& uci) {
-    if (extractTimeslotMoveFromLCommand(uci)) return true;
     if (engineSide == ENGINE_SIDE_UNKNOWN) return false;
     int bestSource = -1, bestDestination = -1, bestScore = -999, bestCount = 0;
     for (int source = 0; source < 64; ++source) {
