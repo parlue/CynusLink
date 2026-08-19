@@ -937,9 +937,7 @@ static bool connectCynus() {
     }
     cynusReady = true;
     Serial.printf("[CYNUS] connected %s\n", cynusDev->getName().c_str());
-    displayPlayPending = false;
-    cynusDisplay("B Scan");
-    Serial.println("[DISPLAY] B Scan: Cynus connected, preparing physical board scan");
+    Serial.println("[DISPLAY] waiting for a valid initial board before ChessLink scan");
     cynusExternalModeConfirmed = false;
     cynusEngineOffCommandSent = false;
     cynusEngineOffSecondSendPending = false;
