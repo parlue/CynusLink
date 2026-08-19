@@ -27,13 +27,13 @@ CynusLink uses the Cynus display to provide simple status information without af
 
 | Display | Meaning |
 | --- | --- |
-| `search` | Cynus connected, waiting for ChessLink |
-| `ready` | ChessLink connected |
+| `BT Scan` | Cynus connected, waiting for ChessLink |
+| `Connect` | ChessLink connected |
 | `play` | CynusLink is ready to play |
 
 After ChessLink connects, `ready` is held until Cynus confirms external-engine readiness. Only then does the display change to `play`.
 
-### Playing as Black
+### Playing as Black (Actual not available)
 
 CynusLink supports starting a game with the human player on the **black** side.
 
@@ -239,8 +239,8 @@ BLE:       NimBLE-Arduino
 
 **Work in progress.**
 
-Basic communication between the Cynus, ESP32-S3 and ChessLink-compatible
-software is working. Physical moves can be transferred to the chess
+Communication between the Cynus, ESP32-S3 and ChessLink-compatible
+software is working (Tested: Bearchess, Picochess and King Element via Diabillo Interface). Physical moves can be transferred to the chess
 software and engine moves can be executed by the Cynus.
 
 Further testing and protocol compatibility improvements are ongoing.
