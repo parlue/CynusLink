@@ -622,7 +622,7 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                 if (initialStartupComplete && state==RUNNING && clConnected && moveCycle==WAIT_HUMAN_MOVE && handleSoundConfigFen(f)) continue;
 
                 if (state==SYNC_BOARD && cynusReady && boardSyncPurpose==BOARD_SYNC_STARTUP && !startupFreshFenExpected && !startupCorrectionMode) {
-                    Serial.printf("[STARTUP] ignoring pre-request FEN: %s\n", f.c_str());
+                    Serial.printf("[STARTUP] ignoring pre-scan FEN: %s\n", f.c_str());
                     continue;
                 }
 
@@ -937,8 +937,14 @@ static void processSupervision() {
         boardSyncRequestPending=false;
         Serial.println("[SYNC] starting physical board scan");
         if (sendCynus("scan board\n")) {
-            boardScanPending=true;
-            boardScanGetFenAt=millis()+BOARD_SCAN_WAIT_MS;
+            if (boardSyncPurpose==BOARD_SYNC_STARTUP) {
+                boardScanPending=false;
+                startupFreshFenExpected=true;
+                Serial.println("[STARTUP] scan started; waiting for Cynus scan FEN");
+            } else {
+                boardScanPending=true;
+                boardScanGetFenAt=millis()+BOARD_SCAN_WAIT_MS;
+            }
         } else {
             boardSyncRequestPending=true;
             boardSyncRequestAt=millis()+500;
@@ -947,13 +953,8 @@ static void processSupervision() {
 
     if (boardScanPending && cynusReady && (int32_t)(millis()-boardScanGetFenAt)>=0) {
         boardScanPending=false;
-        Serial.println("[SYNC] board scan complete; requesting fresh FEN");
-        if (sendCynus("get fen\n")) {
-            if (boardSyncPurpose==BOARD_SYNC_STARTUP) {
-                startupFreshFenExpected=true;
-                Serial.println("[STARTUP] fresh FEN armed; waiting for get fen response");
-            }
-        } else {
+        Serial.println("[SYNC] recovery scan complete; requesting fresh FEN");
+        if (!sendCynus("get fen\n")) {
             boardSyncRequestPending=true;
             boardSyncRequestAt=millis()+500;
         }
