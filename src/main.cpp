@@ -972,6 +972,12 @@ static void requestBoardSync(BoardSyncPurpose purpose, uint32_t delayMs) {
     setMoveCycle(WAIT_HUMAN_MOVE);
     setState(SYNC_BOARD);
     boardSyncRequestPending = true;
+    if (purpose == BOARD_SYNC_STARTUP) {
+        displayPlayPending = false;
+        cynusDisplay("B Scan");
+        if (delayMs < 400) delayMs = 400;
+        Serial.println("[DISPLAY] B Scan: waiting before physical startup scan");
+    }
     boardSyncRequestAt = millis() + delayMs;
     Serial.printf("[SYNC] board request queued purpose=%s\n", purpose == BOARD_SYNC_STARTUP ? "STARTUP" : "RECOVERY");
 }
@@ -1069,9 +1075,6 @@ static void processSupervision() {
     }
     if (boardSyncRequestPending && cynusReady && (int32_t)(millis() - boardSyncRequestAt) >= 0) {
         boardSyncRequestPending = false;
-        displayPlayPending = false;
-        cynusDisplay("B Scan");
-        Serial.println("[DISPLAY] B Scan: scanning physical board before ChessLink");
         Serial.println("[SYNC] starting physical board scan");
         if (sendCynus("scan board\n")) {
             boardScanPending = true;
