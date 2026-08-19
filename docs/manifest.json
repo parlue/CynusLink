@@ -4,7 +4,7 @@
   "new_install_prompt_erase": true,
   "builds": [
     {
-      "chipFamily": "ESP32-C3",
+      "chipFamily": "ESP32-S3",
       "parts": [
         {
           "path": "bootloader.bin",
@@ -15,7 +15,7 @@
           "offset": 32768
         },
         {
-          "path": "firmware.bin",
+          "path": "CynusLink-firmware.bin",
           "offset": 65536
         }
       ]
