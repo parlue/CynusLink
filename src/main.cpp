@@ -52,6 +52,7 @@ static uint16_t clConnHandle = BLE_HS_CONN_HANDLE_NONE;
 static String clBuf;
 static volatile bool clProcessPending = false;
 static volatile bool clStatusPending = false;
+static uint32_t lastAutoStatusAt = 0;
 
 static char board64[65] = "................................................................";
 static String fenNow = "";
@@ -386,12 +387,28 @@ static void sendStatus() {
     lastFenSentToChessLink = fenNow;
 }
 
-static bool autoReport() { return (ee[2] & 7) != 1; }
+static uint8_t autoReportMode() { return ee[2] & 7; }
+
+static uint32_t autoReportIntervalMs() {
+    uint8_t mode = autoReportMode();
+    if (mode == 0) {
+        uint32_t scan = ((uint32_t)ee[1] * 2048UL + 999UL) / 1000UL;
+        return scan ? scan : 41;
+    }
+    if (mode == 2) {
+        uint32_t timed = ((uint32_t)ee[3] * 4096UL + 999UL) / 1000UL;
+        return timed ? timed : 4;
+    }
+    return 0;
+}
+
+static bool autoReport() { return autoReportMode() != 1; }
 
 class ServerCB : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* server, NimBLEConnInfo& info) override {
         clConnected = true;
         clConnHandle = info.getConnHandle();
+        lastAutoStatusAt = 0;
         Serial.printf("[CHESS] connected %s, MTU=%u\n", info.getAddress().toString().c_str(), info.getMTU());
         if (!chessAdvertisingAllowed || !cynusReady || state != WAIT_CHESSLINK) {
             chessRejectEventPending = true;
@@ -405,6 +422,7 @@ class ServerCB : public NimBLEServerCallbacks {
         clConnected = false;
         clNotify = false;
         clConnHandle = BLE_HS_CONN_HANDLE_NONE;
+        lastAutoStatusAt = 0;
         chessDisconnectEventPending = true;
     }
 };
@@ -413,6 +431,7 @@ static ServerCB serverCB;
 class TxCB : public NimBLECharacteristicCallbacks {
     void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&, uint16_t value) override {
         clNotify = value != 0;
+        if (clNotify) lastAutoStatusAt = 0;
     }
 };
 static TxCB txCB;
@@ -500,7 +519,7 @@ static bool extractMoveFromLCommand(String& uci) {
         EngineSide sourceSide = sideOfPiece(board64[source]);
         if (sourceSide == ENGINE_SIDE_UNKNOWN) return false;
         if (engineSide != ENGINE_SIDE_UNKNOWN && sourceSide != engineSide) {
-            Serial.printf("[CHESS] ignoring L move %s-%s: source side does not match engine side\n",
+            Serial.printf("[CHESS] ignoring LED pattern %s-%s: source side does not match engine side\n",
                           squareName(source % 8, source / 8).c_str(),
                           squareName(destination % 8, destination / 8).c_str());
             return false;
@@ -529,9 +548,22 @@ static void handleCL(const String& f) {
         case 'S': sendStatus(); break;
         case 'V': sendCL("v0100"); break;
         case 'X': memset(led, 0, sizeof(led)); sendCL("x"); break;
-        case 'T': if (cynusReady && clConnected) sendCynus("set internal engine off\n"); break;
+        case 'T':
+            memset(led, 0, sizeof(led));
+            memset(ee, 0, sizeof(ee)); ee[0]=0x00; ee[1]=0x14; ee[2]=0x00; ee[4]=0x0F;
+            lastAutoStatusAt=0;
+            Serial.println("[CHESS] Magic Board reset command received; protocol defaults restored");
+            break;
         case 'R': { uint8_t a; if (hb(f[1], f[2], a)) sendCL("r" + hx(a) + hx(ee[a])); break; }
-        case 'W': { uint8_t a,d; if (hb(f[1],f[2],a) && hb(f[3],f[4],d)) { ee[a]=d; sendCL("w"+hx(a)+hx(d)); } break; }
+        case 'W': {
+            uint8_t a,d;
+            if (hb(f[1],f[2],a) && hb(f[3],f[4],d)) {
+                ee[a]=d;
+                if (a==1 || a==2 || a==3) lastAutoStatusAt=0;
+                sendCL("w"+hx(a)+hx(d));
+            }
+            break;
+        }
         case 'L': {
             if (state != RUNNING || moveCycle != WAIT_ENGINE_MOVE) { sendCL("l"); break; }
             uint8_t slot; if (!hb(f[1], f[2], slot)) break;
@@ -552,7 +584,9 @@ static void processCL() {
         int n = flen(clBuf[0]);
         if (n < 0) { clBuf.remove(0,1); continue; }
         if ((int)clBuf.length() < n) return;
-        String f=clBuf.substring(0,n); clBuf.remove(0,n); handleCL(f);
+        String f=clBuf.substring(0,n); clBuf.remove(0,n);
+        Serial.printf("[CHESS RX] %s\n", f.c_str());
+        handleCL(f);
     }
 }
 
@@ -837,7 +871,7 @@ static void requestBoardSync(BoardSyncPurpose purpose, uint32_t delayMs) {
 }
 
 static void recoverChessLinkLoss(const char*) {
-    stopChessLinkAdvertising(); clConnected=false; clNotify=false; clConnHandle=BLE_HS_CONN_HANDLE_NONE; clBuf=""; cynusWaitingForMove=false; publishNextFenToChessLink=false; setMoveCycle(WAIT_HUMAN_MOVE);
+    stopChessLinkAdvertising(); clConnected=false; clNotify=false; clConnHandle=BLE_HS_CONN_HANDLE_NONE; clBuf=""; cynusWaitingForMove=false; publishNextFenToChessLink=false; setMoveCycle(WAIT_HUMAN_MOVE); lastAutoStatusAt=0;
     if (!cynusReady) { boardSynced=false; setState(SEARCH_CYNUS); return; }
     requestBoardSync(initialStartupComplete?BOARD_SYNC_RECOVERY:BOARD_SYNC_STARTUP,150);
 }
@@ -845,7 +879,7 @@ static void recoverChessLinkLoss(const char*) {
 static void recoverCynusLoss(const char*) {
     cynusReady=false; cynusChr=nullptr; cynusDev=nullptr; boardSynced=false; fenNow=""; bufferedFen=""; lastFenSentToChessLink=""; correctionFenCandidate="";
     displayPlayPending=false; engineSide=ENGINE_SIDE_UNKNOWN; boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; cynusWaitingForMove=false;
-    startupFreshFenExpected=false; startupCorrectionMode=false; publishNextFenToChessLink=false; cynusEngineOffCommandSent=false; cynusExternalModeConfirmed=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false; btScanDisplayPending=false;
+    startupFreshFenExpected=false; startupCorrectionMode=false; publishNextFenToChessLink=false; cynusEngineOffCommandSent=false; cynusExternalModeConfirmed=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false; btScanDisplayPending=false; lastAutoStatusAt=0;
     stopChessLinkAdvertising(); clConnected=false; clNotify=false; clConnHandle=BLE_HS_CONN_HANDLE_NONE; clBuf=""; setState(SEARCH_CYNUS); nextCynusScanAt=millis()+500;
 }
 
@@ -855,7 +889,7 @@ static void processSupervision() {
     if (chessDisconnectEventPending) { chessDisconnectEventPending=false; if (cynusReady) recoverChessLinkLoss("callback"); }
     if (chessConnectEventPending) {
         chessConnectEventPending=false;
-        if (cynusReady && boardSynced && state==WAIT_CHESSLINK) { chessAdvertisingAllowed=false; engineSide = startOrientationFlipped ? ENGINE_SIDE_WHITE : ENGINE_SIDE_BLACK; setState(RUNNING); setMoveCycle(startOrientationFlipped?WAIT_ENGINE_MOVE:WAIT_HUMAN_MOVE); cynusDisplay("Connect"); }
+        if (cynusReady && boardSynced && state==WAIT_CHESSLINK) { chessAdvertisingAllowed=false; engineSide = startOrientationFlipped ? ENGINE_SIDE_WHITE : ENGINE_SIDE_BLACK; setState(RUNNING); setMoveCycle(startOrientationFlipped?WAIT_ENGINE_MOVE:WAIT_HUMAN_MOVE); cynusDisplay("Connect"); lastAutoStatusAt=0; }
         else chessRejectEventPending=true;
     }
     if (boardSyncRequestPending && (state!=SYNC_BOARD || boardSyncPurpose==BOARD_SYNC_NONE)) {
@@ -872,6 +906,13 @@ static void processSupervision() {
     if (boardScanPending && cynusReady && (int32_t)(millis()-boardScanGetFenAt)>=0) {
         boardScanPending=false; Serial.println("[SYNC] recovery scan complete; requesting fresh FEN");
         if (!sendCynus("get fen\n")) { boardSyncRequestPending=true; boardSyncRequestAt=millis()+500; }
+    }
+    if (clConnected && clNotify && boardSynced) {
+        uint32_t interval = autoReportIntervalMs();
+        if (interval && (lastAutoStatusAt==0 || (uint32_t)(millis()-lastAutoStatusAt)>=interval)) {
+            lastAutoStatusAt=millis();
+            sendStatus();
+        }
     }
     if (millis()-lastLinkHealthCheckAt>=LINK_HEALTH_CHECK_MS) {
         lastLinkHealthCheckAt=millis();
@@ -905,7 +946,7 @@ static void processStartOrientation() {
 
 static void cynuslinkCoreSetup() {
     Serial.begin(115200); delay(1500); Serial.println(); Serial.println("=== CynusLink Robust Core Baseline v2.11 ===");
-    memset(ee,0,sizeof(ee)); ee[0]=0x00; ee[1]=0x14; ee[2]=0x03; ee[4]=0x0F;
+    memset(ee,0,sizeof(ee)); ee[0]=0x00; ee[1]=0x14; ee[2]=0x00; ee[4]=0x0F;
     NimBLEDevice::init(CL_NAME); NimBLEDevice::setPower(3); NimBLEDevice::setMTU(128);
     createChessLinkServer(); setState(SEARCH_CYNUS); moveCycleEnteredAt=millis(); startCynusScan();
 }
