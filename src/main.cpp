@@ -117,7 +117,6 @@ static void schedulePlayDisplay(uint32_t delayMs = 1800);
 static String moveDisplayText(const String& uci);
 static String inferMoveDisplayText(const String& oldFen, const String& newFen);
 static void createChessLinkServer();
-static void warmupChessLinkAdvertising();
 static void startChessLinkAdvertising();
 static void stopChessLinkAdvertising();
 static void sendCL(const String& payload);
@@ -129,7 +128,7 @@ static void requestBoardSync(BoardSyncPurpose purpose, uint32_t delayMs = 0);
 static void recoverChessLinkLoss(const char* source);
 static void recoverCynusLoss(const char* source);
 static void processSupervision();
-static void configureStartOrientation(bool flipped);
+static bool configureStartOrientation(bool flipped);
 static void processStartOrientation();
 
 static const char* stateName(GatewayState s) {
@@ -434,8 +433,8 @@ static uint8_t ledValue(int fileCorner, int rankCornerTop) {
     return led[fileCorner * 9 + rankCornerTop];
 }
 
-static uint8_t dominantSquarePattern(int file, int rankTop) {
-    const uint8_t corners[4] = { ledValue(file, rankTop), ledValue(file + 1, rankTop), ledValue(file, rankTop + 1), ledValue(file + 1, rankTop + 1) };
+static uint8_t dominantSquarePattern(int file, int rankCornerTop) {
+    const uint8_t corners[4] = { ledValue(file, rankCornerTop), ledValue(file + 1, rankCornerTop), ledValue(file, rankCornerTop + 1), ledValue(file + 1, rankCornerTop + 1) };
     int counts[256] = {0};
     for (uint8_t v : corners) if (v != 0) counts[v]++;
     int best = 0;
@@ -555,26 +554,29 @@ static void createChessLinkServer() {
     clServerStarted=true; Serial.println("[CHESS] server created, advertising still OFF");
 }
 
-static void warmupChessLinkAdvertising() {
-    if (!clServerStarted) return;
-    chessAdvertisingAllowed=false;
-    if (!NimBLEDevice::startAdvertising()) return;
-    delay(150); NimBLEDevice::stopAdvertising(); delay(100); Serial.println("[CHESS] advertising initialized and OFF");
-}
-
 static void startChessLinkAdvertising() {
     if (!clServerStarted || !cynusReady || !boardSynced || state != WAIT_CHESSLINK) return;
     chessAdvertisingAllowed=true;
     if (NimBLEDevice::startAdvertising()) Serial.println("[CHESS] advertising as MILLENNIUM CHESS"); else chessAdvertisingAllowed=false;
 }
 
-static void configureStartOrientation(bool flipped) {
-    startOrientationLatched=true; startOrientationFlipped=flipped; openingStartPhase=true; startStatusPending=true;
-    lastStartupErrorDisplay=""; lastStartupFenEvaluated=""; lastGameErrorDisplay="";
-    engineSide = flipped ? ENGINE_SIDE_WHITE : ENGINE_SIDE_BLACK;
-    setMoveCycle(flipped ? WAIT_ENGINE_MOVE : WAIT_HUMAN_MOVE);
+static bool configureStartOrientation(bool flipped) {
+    startOrientationLatched=true;
+    startOrientationFlipped=flipped;
+    openingStartPhase=true;
+    startStatusPending=true;
+    lastStartupErrorDisplay="";
+    lastStartupFenEvaluated="";
+    lastGameErrorDisplay="";
+
     const char* cmd = flipped ? "set flip board on\n" : "set flip board off\n";
-    if (sendCynus(cmd)) Serial.printf("[STARTPOS] set flip board %s; first turn=%s\n", flipped?"ON":"OFF", flipped?"SOFTWARE":"HUMAN");
+    if (!sendCynus(cmd)) {
+        Serial.printf("[STARTPOS] set flip board %s FAILED\n", flipped?"ON":"OFF");
+        return false;
+    }
+
+    Serial.printf("[STARTPOS] set flip board %s; Cynus startup orientation confirmed\n", flipped?"ON":"OFF");
+    return true;
 }
 
 static void cynusBytes(const uint8_t* data, size_t len) {
@@ -582,26 +584,39 @@ static void cynusBytes(const uint8_t* data, size_t len) {
         char c=(char)data[i];
         if (c=='\n') {
             String line=cynusLine; cynusLine=""; line.trim(); Serial.printf("[CYNUS LINE] %s\n",line.c_str());
+
             if (line.equalsIgnoreCase("get move")) {
-                if (state == SYNC_BOARD && !initialStartupComplete && !clConnected) {
-                    Serial.println("[STARTUP] pre-ChessLink get move ignored; board validation stays active");
+                if (!(cynusReady && clConnected)) {
+                    Serial.println("[GATEWAY] get move ignored until ChessLink is connected");
                     continue;
                 }
+
                 bool firstExternalReady=!cynusExternalModeConfirmed;
-                cynusWaitingForMove=true; cynusExternalModeConfirmed=true;
-                if (!(cynusReady && clConnected)) continue;
+                cynusWaitingForMove=true;
+                cynusExternalModeConfirmed=true;
                 setState(RUNNING);
                 if (firstExternalReady) { displayPlayPending=false; cynusDisplay("play"); }
-                if (moveCycle==WAIT_HUMAN_MOVE) { boardSynced=false; publishNextFenToChessLink=true; sendCynus("get fen\n"); }
-                else if (moveCycle==WAIT_ROBOT_POSITION) { boardSynced=false; publishNextFenToChessLink=false; cynusDisplay("play"); sendCynus("get fen\n"); }
-                else {
+
+                if (moveCycle==WAIT_HUMAN_MOVE) {
+                    boardSynced=false;
+                    publishNextFenToChessLink=true;
+                    sendCynus("get fen\n");
+                } else if (moveCycle==WAIT_ROBOT_POSITION) {
+                    boardSynced=false;
+                    publishNextFenToChessLink=false;
+                    cynusDisplay("play");
+                    sendCynus("get fen\n");
+                } else {
                     if (correctionFenCandidate.length() && correctionFenCandidate != lastFenSentToChessLink && fen2board(correctionFenCandidate)) {
-                        fenNow=correctionFenCandidate; boardSynced=true; if (autoReport()) clStatusPending=true;
+                        fenNow=correctionFenCandidate;
+                        boardSynced=true;
+                        if (autoReport()) clStatusPending=true;
                     }
                     correctionFenCandidate="";
                 }
                 continue;
             }
+
             if (line.startsWith("fen:")) {
                 String f=line.substring(4); f.trim();
                 if (initialStartupComplete && state==RUNNING && clConnected && moveCycle==WAIT_HUMAN_MOVE && handleSoundConfigFen(f)) continue;
@@ -612,43 +627,90 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                 }
 
                 if (fen2board(f)) {
-                    bufferedFen=f; Serial.printf("[BOARD] buffered FEN %s\n",bufferedFen.c_str());
+                    bufferedFen=f;
+                    Serial.printf("[BOARD] buffered FEN %s\n",bufferedFen.c_str());
+
                     if (state==SYNC_BOARD && cynusReady && boardSyncPurpose!=BOARD_SYNC_NONE) {
-                        String placement=bufferedFen; int sp=placement.indexOf(' '); if (sp>=0) placement=placement.substring(0,sp);
+                        String placement=bufferedFen;
+                        int sp=placement.indexOf(' ');
+                        if (sp>=0) placement=placement.substring(0,sp);
                         int orientation=orientationOfFen(placement);
-                        if (boardSyncPurpose==BOARD_SYNC_STARTUP && orientation<0) {
-                            startupFreshFenExpected=false;
-                            startupCorrectionMode=true;
-                            Serial.printf("[STARTUP] board not ready: %s\n",bufferedFen.c_str());
-                            Serial.println("[STARTUP] waiting for initial position; correct board and press Cynus scan");
-                            continue;
-                        }
+
                         if (boardSyncPurpose==BOARD_SYNC_STARTUP) {
+                            if (orientation<0) {
+                                startupFreshFenExpected=false;
+                                startupCorrectionMode=true;
+                                Serial.printf("[STARTUP] board not ready: %s\n",bufferedFen.c_str());
+                                Serial.println("[STARTUP] waiting for initial position; correct board and press Cynus scan");
+                                continue;
+                            }
+
+                            if (!configureStartOrientation(orientation==1)) {
+                                boardSynced=false;
+                                Serial.println("[STARTUP] flip command failed; staying in Cynus board validation");
+                                continue;
+                            }
+
                             startupFreshFenExpected=false;
                             startupCorrectionMode=false;
-                        }
-                        fenNow=bufferedFen; boardSynced=true;
-                        BoardSyncPurpose completedPurpose=boardSyncPurpose; boardSyncPurpose=BOARD_SYNC_NONE;
-                        if (completedPurpose==BOARD_SYNC_STARTUP) {
+                            fenNow=bufferedFen;
+                            boardSynced=true;
+                            boardSyncPurpose=BOARD_SYNC_NONE;
                             initialStartupComplete=true;
-                            configureStartOrientation(orientation==1);
-                            Serial.printf("[STARTUP] valid %s initial position confirmed from fresh FEN\n", orientation==1?"flipped":"normal");
+
+                            Serial.printf("[STARTUP] valid %s initial position confirmed; Cynus phase complete\n", orientation==1?"flipped":"normal");
+
+                            if (!clConnected) {
+                                setState(WAIT_CHESSLINK);
+                                cynusDisplay("BT Scan");
+                                Serial.println("[DISPLAY] BT Scan: Cynus board and flip confirmed, scanning for ChessLink");
+                                startChessLinkAdvertising();
+                            } else {
+                                engineSide = startOrientationFlipped ? ENGINE_SIDE_WHITE : ENGINE_SIDE_BLACK;
+                                setState(RUNNING);
+                                setMoveCycle(startOrientationFlipped?WAIT_ENGINE_MOVE:WAIT_HUMAN_MOVE);
+                            }
+                            continue;
                         }
+
+                        fenNow=bufferedFen;
+                        boardSynced=true;
+                        boardSyncPurpose=BOARD_SYNC_NONE;
                         if (!clConnected) {
                             setState(WAIT_CHESSLINK);
                             cynusDisplay("BT Scan");
-                            Serial.println("[DISPLAY] BT Scan: valid board confirmed, scanning for ChessLink");
                             startChessLinkAdvertising();
-                        } else { setState(RUNNING); setMoveCycle(WAIT_HUMAN_MOVE); }
+                        } else {
+                            setState(RUNNING);
+                            setMoveCycle(WAIT_HUMAN_MOVE);
+                        }
                         continue;
                     }
+
                     if (state==RUNNING && clConnected && publishNextFenToChessLink) {
-                        String previousAcceptedFen=fenNow; fenNow=bufferedFen; boardSynced=true; publishNextFenToChessLink=false;
-                        String humanDisplayMove=inferMoveDisplayText(previousAcceptedFen,fenNow); if (humanDisplayMove.length()) { cynusDisplay(humanDisplayMove.c_str()); schedulePlayDisplay(1400); }
-                        if (autoReport()) clStatusPending=true; setMoveCycle(WAIT_ENGINE_MOVE); continue;
+                        String previousAcceptedFen=fenNow;
+                        fenNow=bufferedFen;
+                        boardSynced=true;
+                        publishNextFenToChessLink=false;
+                        String humanDisplayMove=inferMoveDisplayText(previousAcceptedFen,fenNow);
+                        if (humanDisplayMove.length()) { cynusDisplay(humanDisplayMove.c_str()); schedulePlayDisplay(1400); }
+                        if (autoReport()) clStatusPending=true;
+                        setMoveCycle(WAIT_ENGINE_MOVE);
+                        continue;
                     }
-                    if (state==RUNNING && clConnected && moveCycle==WAIT_ENGINE_MOVE) { correctionFenCandidate=bufferedFen; continue; }
-                    if (state==RUNNING && moveCycle==WAIT_ROBOT_POSITION) { fenNow=bufferedFen; boardSynced=true; setMoveCycle(WAIT_HUMAN_MOVE); continue; }
+
+                    if (state==RUNNING && clConnected && moveCycle==WAIT_ENGINE_MOVE) {
+                        correctionFenCandidate=bufferedFen;
+                        continue;
+                    }
+
+                    if (state==RUNNING && moveCycle==WAIT_ROBOT_POSITION) {
+                        fenNow=bufferedFen;
+                        boardSynced=true;
+                        setMoveCycle(WAIT_HUMAN_MOVE);
+                        continue;
+                    }
+
                     Serial.println("[BOARD] camera/intermediate FEN buffered only; not sent to ChessLink");
                 }
             }
@@ -658,32 +720,61 @@ static void cynusBytes(const uint8_t* data, size_t len) {
 
 static void cynusNotify(NimBLERemoteCharacteristic*, uint8_t* data, size_t len, bool) {
     Serial.print("[CYNUS RX] ");
-    for (size_t i=0;i<len;++i) { char c=(char)data[i]; if (c=='\r') Serial.print("\\r"); else if (c=='\n') Serial.print("\\n"); else if (c>=32&&c<=126) Serial.print(c); }
-    Serial.println(); cynusBytes(data,len);
+    for (size_t i=0;i<len;++i) {
+        char c=(char)data[i];
+        if (c=='\r') Serial.print("\\r");
+        else if (c=='\n') Serial.print("\\n");
+        else if (c>=32&&c<=126) Serial.print(c);
+    }
+    Serial.println();
+    cynusBytes(data,len);
 }
 
 class CClientCB : public NimBLEClientCallbacks {
-    void onDisconnect(NimBLEClient*, int reason) override { Serial.printf("[CYNUS] disconnected %d\n",reason); cynusReady=false; cynusChr=nullptr; cynusDisconnectEventPending=true; }
+    void onDisconnect(NimBLEClient*, int reason) override {
+        Serial.printf("[CYNUS] disconnected %d\n",reason);
+        cynusReady=false;
+        cynusChr=nullptr;
+        cynusDisconnectEventPending=true;
+    }
 };
 static CClientCB cclientCB;
 
 class ScanCB : public NimBLEScanCallbacks {
     void onResult(const NimBLEAdvertisedDevice* dev) override {
-        if (!dev->haveName()) return; std::string name=dev->getName(); if (name.rfind(CYNUS_PREFIX,0)!=0) return;
-        Serial.printf("[CYNUS] found %s\n",name.c_str()); NimBLEDevice::getScan()->stop(); cynusDev=dev; cynusConnectPending=true;
+        if (!dev->haveName()) return;
+        std::string name=dev->getName();
+        if (name.rfind(CYNUS_PREFIX,0)!=0) return;
+        Serial.printf("[CYNUS] found %s\n",name.c_str());
+        NimBLEDevice::getScan()->stop();
+        cynusDev=dev;
+        cynusConnectPending=true;
     }
-    void onScanEnd(const NimBLEScanResults&, int) override { if (!cynusConnectPending && !cynusReady) { delay(500); startCynusScan(); } }
+    void onScanEnd(const NimBLEScanResults&, int) override {
+        if (!cynusConnectPending && !cynusReady) {
+            delay(500);
+            startCynusScan();
+        }
+    }
 };
 static ScanCB scanCB;
 
 static void startCynusScan() {
     if (cynusReady || cynusConnectPending) return;
-    NimBLEScan* scan=NimBLEDevice::getScan(); scan->setScanCallbacks(&scanCB,false); scan->setInterval(100); scan->setWindow(100); scan->setActiveScan(true);
-    Serial.println("[CYNUS] scan CYNUS-*"); scan->start(0);
+    NimBLEScan* scan=NimBLEDevice::getScan();
+    scan->setScanCallbacks(&scanCB,false);
+    scan->setInterval(100);
+    scan->setWindow(100);
+    scan->setActiveScan(true);
+    Serial.println("[CYNUS] scan CYNUS-*");
+    scan->start(0);
 }
 
 static bool sendCynus(const char* s) {
-    if (!cynusReady || !cynusChr) { Serial.println("[CYNUS TX] not ready"); return false; }
+    if (!cynusReady || !cynusChr) {
+        Serial.println("[CYNUS TX] not ready");
+        return false;
+    }
     Serial.printf("[CYNUS TX] %s",s);
     if (cynusChr->canWriteNoResponse()) return cynusChr->writeValue((const uint8_t*)s,strlen(s),false);
     if (cynusChr->canWrite()) return cynusChr->writeValue((const uint8_t*)s,strlen(s),true);
@@ -692,123 +783,303 @@ static bool sendCynus(const char* s) {
 
 static void cynusDisplay(const char* text) {
     if (!cynusReady || !cynusChr || !text) return;
-    String msg=text; if (msg.length()>7) msg=msg.substring(0,7); String cmd="display txt "+msg+"\n";
+    String msg=text;
+    if (msg.length()>7) msg=msg.substring(0,7);
+    String cmd="display txt "+msg+"\n";
     if (sendCynus(cmd.c_str())) Serial.printf("[DISPLAY] %s\n",msg.c_str());
 }
 
-static void schedulePlayDisplay(uint32_t delayMs) { displayPlayPending=true; displayPlayAt=millis()+delayMs; }
+static void schedulePlayDisplay(uint32_t delayMs) {
+    displayPlayPending=true;
+    displayPlayAt=millis()+delayMs;
+}
 
 static bool connectCynus() {
     if (!cynusDev) return false;
-    if (!cynusClient) { cynusClient=NimBLEDevice::createClient(); cynusClient->setClientCallbacks(&cclientCB,false); cynusClient->setConnectTimeout(10000); }
+    if (!cynusClient) {
+        cynusClient=NimBLEDevice::createClient();
+        cynusClient->setClientCallbacks(&cclientCB,false);
+        cynusClient->setConnectTimeout(10000);
+    }
     if (!cynusClient->connect(cynusDev)) return false;
-    NimBLERemoteService* service=cynusClient->getService(CYNUS_SERVICE); if (!service) { cynusClient->disconnect(); return false; }
+    NimBLERemoteService* service=cynusClient->getService(CYNUS_SERVICE);
+    if (!service) { cynusClient->disconnect(); return false; }
     cynusChr=service->getCharacteristic(CYNUS_CHAR);
-    if (!cynusChr || !cynusChr->canNotify() || !cynusChr->subscribe(true,cynusNotify)) { cynusClient->disconnect(); return false; }
-    cynusReady=true; Serial.printf("[CYNUS] connected %s\n",cynusDev->getName().c_str());
-    cynusExternalModeConfirmed=false; cynusEngineOffCommandSent=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false;
-    boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; boardSynced=false; engineSide=ENGINE_SIDE_UNKNOWN;
-    startupFreshFenExpected=false; startupCorrectionMode=false; lastStartupFenEvaluated="";
-    if (sendCynus("set internal engine off\n")) { Serial.println("[CYNUS] internal engine OFF command #1 sent"); engineOffSentAt=millis(); cynusEngineOffSecondSendPending=true; chessAdvertisingPendingAfterEngineOff=true; }
+    if (!cynusChr || !cynusChr->canNotify() || !cynusChr->subscribe(true,cynusNotify)) {
+        cynusClient->disconnect();
+        return false;
+    }
+
+    cynusReady=true;
+    Serial.printf("[CYNUS] connected %s\n",cynusDev->getName().c_str());
+    cynusExternalModeConfirmed=false;
+    cynusEngineOffCommandSent=false;
+    cynusEngineOffSecondSendPending=false;
+    chessAdvertisingPendingAfterEngineOff=false;
+    boardSyncPurpose=BOARD_SYNC_NONE;
+    boardSyncRequestPending=false;
+    boardScanPending=false;
+    boardSynced=false;
+    engineSide=ENGINE_SIDE_UNKNOWN;
+    startupFreshFenExpected=false;
+    startupCorrectionMode=false;
+    lastStartupFenEvaluated="";
+
+    if (sendCynus("set internal engine off\n")) {
+        Serial.println("[CYNUS] internal engine OFF command #1 sent");
+        engineOffSentAt=millis();
+        cynusEngineOffSecondSendPending=true;
+        chessAdvertisingPendingAfterEngineOff=true;
+    }
     return true;
 }
 
-static void stopChessLinkAdvertising() { if (!clServerStarted) return; chessAdvertisingAllowed=false; NimBLEDevice::getAdvertising()->stop(); Serial.println("[CHESS] advertising stopped"); }
+static void stopChessLinkAdvertising() {
+    if (!clServerStarted) return;
+    chessAdvertisingAllowed=false;
+    NimBLEDevice::getAdvertising()->stop();
+    Serial.println("[CHESS] advertising stopped");
+}
 
 static void requestBoardSync(BoardSyncPurpose purpose, uint32_t delayMs) {
     if (!cynusReady) return;
-    boardSyncPurpose=purpose; boardSynced=false; publishNextFenToChessLink=false; cynusWaitingForMove=false; setMoveCycle(WAIT_HUMAN_MOVE); setState(SYNC_BOARD);
-    if (purpose==BOARD_SYNC_STARTUP) { startupFreshFenExpected=false; startupCorrectionMode=false; lastStartupFenEvaluated=""; }
-    boardSyncRequestPending=true; boardSyncRequestAt=millis()+delayMs; Serial.printf("[SYNC] board request queued purpose=%s\n",purpose==BOARD_SYNC_STARTUP?"STARTUP":"RECOVERY");
+    boardSyncPurpose=purpose;
+    boardSynced=false;
+    publishNextFenToChessLink=false;
+    cynusWaitingForMove=false;
+    if (initialStartupComplete) setMoveCycle(WAIT_HUMAN_MOVE);
+    setState(SYNC_BOARD);
+    if (purpose==BOARD_SYNC_STARTUP) {
+        startupFreshFenExpected=false;
+        startupCorrectionMode=false;
+        lastStartupFenEvaluated="";
+    }
+    boardSyncRequestPending=true;
+    boardSyncRequestAt=millis()+delayMs;
+    Serial.printf("[SYNC] board request queued purpose=%s\n",purpose==BOARD_SYNC_STARTUP?"STARTUP":"RECOVERY");
 }
 
 static void recoverChessLinkLoss(const char*) {
-    stopChessLinkAdvertising(); clConnected=false; clNotify=false; clConnHandle=BLE_HS_CONN_HANDLE_NONE; clBuf=""; cynusWaitingForMove=false; publishNextFenToChessLink=false; setMoveCycle(WAIT_HUMAN_MOVE);
-    if (!cynusReady) { boardSynced=false; setState(SEARCH_CYNUS); return; }
+    stopChessLinkAdvertising();
+    clConnected=false;
+    clNotify=false;
+    clConnHandle=BLE_HS_CONN_HANDLE_NONE;
+    clBuf="";
+    cynusWaitingForMove=false;
+    publishNextFenToChessLink=false;
+    setMoveCycle(WAIT_HUMAN_MOVE);
+    if (!cynusReady) {
+        boardSynced=false;
+        setState(SEARCH_CYNUS);
+        return;
+    }
     requestBoardSync(initialStartupComplete?BOARD_SYNC_RECOVERY:BOARD_SYNC_STARTUP,150);
 }
 
 static void recoverCynusLoss(const char*) {
-    cynusReady=false; cynusChr=nullptr; cynusDev=nullptr; boardSynced=false; fenNow=""; bufferedFen=""; lastFenSentToChessLink=""; correctionFenCandidate="";
-    displayPlayPending=false; engineSide=ENGINE_SIDE_UNKNOWN; boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; cynusWaitingForMove=false;
-    startupFreshFenExpected=false; startupCorrectionMode=false;
-    publishNextFenToChessLink=false; cynusEngineOffCommandSent=false; cynusExternalModeConfirmed=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false;
-    stopChessLinkAdvertising(); clConnected=false; clNotify=false; clConnHandle=BLE_HS_CONN_HANDLE_NONE; clBuf=""; setState(SEARCH_CYNUS); nextCynusScanAt=millis()+500;
+    cynusReady=false;
+    cynusChr=nullptr;
+    cynusDev=nullptr;
+    boardSynced=false;
+    fenNow="";
+    bufferedFen="";
+    lastFenSentToChessLink="";
+    correctionFenCandidate="";
+    displayPlayPending=false;
+    engineSide=ENGINE_SIDE_UNKNOWN;
+    boardSyncPurpose=BOARD_SYNC_NONE;
+    boardSyncRequestPending=false;
+    boardScanPending=false;
+    cynusWaitingForMove=false;
+    startupFreshFenExpected=false;
+    startupCorrectionMode=false;
+    publishNextFenToChessLink=false;
+    cynusEngineOffCommandSent=false;
+    cynusExternalModeConfirmed=false;
+    cynusEngineOffSecondSendPending=false;
+    chessAdvertisingPendingAfterEngineOff=false;
+    stopChessLinkAdvertising();
+    clConnected=false;
+    clNotify=false;
+    clConnHandle=BLE_HS_CONN_HANDLE_NONE;
+    clBuf="";
+    setState(SEARCH_CYNUS);
+    nextCynusScanAt=millis()+500;
 }
 
 static void processSupervision() {
-    if (chessRejectEventPending) { chessRejectEventPending=false; if (clServer && clConnHandle!=BLE_HS_CONN_HANDLE_NONE) clServer->disconnect(clConnHandle); }
-    if (cynusDisconnectEventPending) { cynusDisconnectEventPending=false; recoverCynusLoss("callback"); }
-    if (chessDisconnectEventPending) { chessDisconnectEventPending=false; if (cynusReady) recoverChessLinkLoss("callback"); }
+    if (chessRejectEventPending) {
+        chessRejectEventPending=false;
+        if (clServer && clConnHandle!=BLE_HS_CONN_HANDLE_NONE) clServer->disconnect(clConnHandle);
+    }
+    if (cynusDisconnectEventPending) {
+        cynusDisconnectEventPending=false;
+        recoverCynusLoss("callback");
+    }
+    if (chessDisconnectEventPending) {
+        chessDisconnectEventPending=false;
+        if (cynusReady) recoverChessLinkLoss("callback");
+    }
     if (chessConnectEventPending) {
         chessConnectEventPending=false;
-        if (cynusReady && boardSynced && state==WAIT_CHESSLINK) { chessAdvertisingAllowed=false; setState(RUNNING); setMoveCycle(startOrientationFlipped?WAIT_ENGINE_MOVE:WAIT_HUMAN_MOVE); cynusDisplay("Connect"); }
-        else chessRejectEventPending=true;
+        if (cynusReady && boardSynced && state==WAIT_CHESSLINK) {
+            chessAdvertisingAllowed=false;
+            engineSide = startOrientationFlipped ? ENGINE_SIDE_WHITE : ENGINE_SIDE_BLACK;
+            setState(RUNNING);
+            setMoveCycle(startOrientationFlipped?WAIT_ENGINE_MOVE:WAIT_HUMAN_MOVE);
+            cynusDisplay("Connect");
+        } else {
+            chessRejectEventPending=true;
+        }
     }
+
     if (boardSyncRequestPending && cynusReady && (int32_t)(millis()-boardSyncRequestAt)>=0) {
-        boardSyncRequestPending=false; Serial.println("[SYNC] starting physical board scan");
-        if (sendCynus("scan board\n")) { boardScanPending=true; boardScanGetFenAt=millis()+BOARD_SCAN_WAIT_MS; }
-        else { boardSyncRequestPending=true; boardSyncRequestAt=millis()+500; }
+        boardSyncRequestPending=false;
+        Serial.println("[SYNC] starting physical board scan");
+        if (sendCynus("scan board\n")) {
+            boardScanPending=true;
+            boardScanGetFenAt=millis()+BOARD_SCAN_WAIT_MS;
+        } else {
+            boardSyncRequestPending=true;
+            boardSyncRequestAt=millis()+500;
+        }
     }
+
     if (boardScanPending && cynusReady && (int32_t)(millis()-boardScanGetFenAt)>=0) {
-        boardScanPending=false; Serial.println("[SYNC] board scan complete; requesting fresh FEN");
+        boardScanPending=false;
+        Serial.println("[SYNC] board scan complete; requesting fresh FEN");
         if (sendCynus("get fen\n")) {
             if (boardSyncPurpose==BOARD_SYNC_STARTUP) {
                 startupFreshFenExpected=true;
                 Serial.println("[STARTUP] fresh FEN armed; waiting for get fen response");
             }
-        } else { boardSyncRequestPending=true; boardSyncRequestAt=millis()+500; }
+        } else {
+            boardSyncRequestPending=true;
+            boardSyncRequestAt=millis()+500;
+        }
     }
+
     if (millis()-lastLinkHealthCheckAt>=LINK_HEALTH_CHECK_MS) {
         lastLinkHealthCheckAt=millis();
-        if (cynusReady && cynusClient && !cynusClient->isConnected()) { recoverCynusLoss("health-check"); return; }
-        if (clConnected && clServer && clServer->getConnectedCount()==0) { recoverChessLinkLoss("health-check"); return; }
+        if (cynusReady && cynusClient && !cynusClient->isConnected()) {
+            recoverCynusLoss("health-check");
+            return;
+        }
+        if (clConnected && clServer && clServer->getConnectedCount()==0) {
+            recoverChessLinkLoss("health-check");
+            return;
+        }
     }
-    if (!cynusReady && !cynusConnectPending && state==SEARCH_CYNUS && nextCynusScanAt && (int32_t)(millis()-nextCynusScanAt)>=0) { nextCynusScanAt=0; startCynusScan(); }
+
+    if (!cynusReady && !cynusConnectPending && state==SEARCH_CYNUS && nextCynusScanAt && (int32_t)(millis()-nextCynusScanAt)>=0) {
+        nextCynusScanAt=0;
+        startCynusScan();
+    }
 }
 
 static void showGameRescanErrors() {
-    if (!initialStartupComplete || state!=RUNNING || moveCycle!=WAIT_ENGINE_MOVE) { lastGameErrorDisplay=""; return; }
+    if (!initialStartupComplete || state!=RUNNING || moveCycle!=WAIT_ENGINE_MOVE) {
+        lastGameErrorDisplay="";
+        return;
+    }
     if (!correctionFenCandidate.length() || !lastFenSentToChessLink.length()) return;
     String msg=differenceDisplay(correctionFenCandidate,lastFenSentToChessLink);
-    if (!msg.length()) { if (lastGameErrorDisplay.length()) { lastGameErrorDisplay=""; cynusDisplay("play"); } return; }
+    if (!msg.length()) {
+        if (lastGameErrorDisplay.length()) {
+            lastGameErrorDisplay="";
+            cynusDisplay("play");
+        }
+        return;
+    }
     if (msg==lastGameErrorDisplay) return;
-    lastGameErrorDisplay=msg; displayPlayPending=false; cynusDisplay(msg.c_str()); sendCynus("play audio error\n");
+    lastGameErrorDisplay=msg;
+    displayPlayPending=false;
+    cynusDisplay(msg.c_str());
+    sendCynus("play audio error\n");
 }
 
 static void processStartOrientation() {
     int accepted=orientationOfFen(fenNow);
     if (accepted>=0 && initialStartupComplete) {
         bool flipped=accepted==1;
-        if (!startOrientationLatched || startOrientationFlipped!=flipped) configureStartOrientation(flipped);
+        if (!startOrientationLatched || startOrientationFlipped!=flipped) {
+            configureStartOrientation(flipped);
+        }
     } else if (fenNow.length() && startOrientationLatched && state==RUNNING) {
-        startOrientationLatched=false; openingStartPhase=false; startStatusPending=false;
+        startOrientationLatched=false;
+        openingStartPhase=false;
+        startStatusPending=false;
     }
-    if (openingStartPhase && state==RUNNING && accepted>=0) setMoveCycle(startOrientationFlipped?WAIT_ENGINE_MOVE:WAIT_HUMAN_MOVE);
-    if (startStatusPending && boardSynced && clConnected && clNotify) { clStatusPending=true; startStatusPending=false; }
-    showStartupErrors(); showGameRescanErrors();
+
+    if (openingStartPhase && state==RUNNING && accepted>=0) {
+        engineSide = startOrientationFlipped ? ENGINE_SIDE_WHITE : ENGINE_SIDE_BLACK;
+        setMoveCycle(startOrientationFlipped?WAIT_ENGINE_MOVE:WAIT_HUMAN_MOVE);
+    }
+
+    if (startStatusPending && boardSynced && clConnected && clNotify) {
+        clStatusPending=true;
+        startStatusPending=false;
+    }
+
+    showStartupErrors();
+    showGameRescanErrors();
 }
 
 static void cynuslinkCoreSetup() {
-    Serial.begin(115200); delay(1500); Serial.println(); Serial.println("=== CynusLink Robust Core Baseline v2.11 ===");
-    memset(ee,0,sizeof(ee)); ee[0]=0x00; ee[1]=0x14; ee[2]=0x03; ee[4]=0x0F;
-    NimBLEDevice::init(CL_NAME); NimBLEDevice::setPower(3); NimBLEDevice::setMTU(128);
-    createChessLinkServer(); warmupChessLinkAdvertising(); setState(SEARCH_CYNUS); moveCycleEnteredAt=millis(); startCynusScan();
+    Serial.begin(115200);
+    delay(1500);
+    Serial.println();
+    Serial.println("=== CynusLink Robust Core Baseline v2.11 ===");
+    memset(ee,0,sizeof(ee));
+    ee[0]=0x00; ee[1]=0x14; ee[2]=0x03; ee[4]=0x0F;
+    NimBLEDevice::init(CL_NAME);
+    NimBLEDevice::setPower(3);
+    NimBLEDevice::setMTU(128);
+    createChessLinkServer();
+    setState(SEARCH_CYNUS);
+    moveCycleEnteredAt=millis();
+    startCynusScan();
 }
 
 static void cynuslinkCoreLoop() {
-    if (cynusConnectPending) { cynusConnectPending=false; if (!connectCynus()) { cynusDev=nullptr; delay(1000); startCynusScan(); } }
-    if (clProcessPending) { clProcessPending=false; processCL(); }
-    if (clStatusPending) { clStatusPending=false; sendStatus(); }
+    if (cynusConnectPending) {
+        cynusConnectPending=false;
+        if (!connectCynus()) {
+            cynusDev=nullptr;
+            delay(1000);
+            startCynusScan();
+        }
+    }
+    if (clProcessPending) {
+        clProcessPending=false;
+        processCL();
+    }
+    if (clStatusPending) {
+        clStatusPending=false;
+        sendStatus();
+    }
+
     processSupervision();
-    if (displayPlayPending && cynusReady && clConnected && (int32_t)(millis()-displayPlayAt)>=0) { displayPlayPending=false; cynusDisplay("play"); }
+
+    if (displayPlayPending && cynusReady && clConnected && (int32_t)(millis()-displayPlayAt)>=0) {
+        displayPlayPending=false;
+        cynusDisplay("play");
+    }
+
     if (cynusEngineOffSecondSendPending && cynusReady && millis()-engineOffSentAt>=300) {
         cynusEngineOffSecondSendPending=false;
-        if (sendCynus("set internal engine off\n")) { Serial.println("[CYNUS] internal engine OFF command #2 sent"); engineOffSentAt=millis(); }
+        if (sendCynus("set internal engine off\n")) {
+            Serial.println("[CYNUS] internal engine OFF command #2 sent");
+            engineOffSentAt=millis();
+        }
     }
+
     if (chessAdvertisingPendingAfterEngineOff && cynusReady && !cynusEngineOffSecondSendPending && millis()-engineOffSentAt>=300) {
-        chessAdvertisingPendingAfterEngineOff=false; Serial.println("[STARTUP] engine-off sequence complete"); requestBoardSync(initialStartupComplete?BOARD_SYNC_RECOVERY:BOARD_SYNC_STARTUP,0);
+        chessAdvertisingPendingAfterEngineOff=false;
+        Serial.println("[STARTUP] engine-off sequence complete");
+        requestBoardSync(initialStartupComplete?BOARD_SYNC_RECOVERY:BOARD_SYNC_STARTUP,0);
     }
+
     delay(10);
 }
 
