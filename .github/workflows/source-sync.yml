@@ -1,0 +1,27 @@
+name: One-time source sync
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/source-sync.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch main.cpp
+        run: |
+          sed -i '/boardSyncRequestPending = false;/a\        displayPlayPending = false;\n        cynusDisplay("B Scan");\n        Serial.println("[DISPLAY] B Scan: scanning physical board before ChessLink");' src/main.cpp
+      - name: Commit source and remove sync workflow
+        run: |
+          rm -f .github/workflows/source-sync.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A src/main.cpp .github/workflows/source-sync.yml
+          git commit -m 'Restore board scan display [skip ci]'
+          git push
