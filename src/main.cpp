@@ -85,6 +85,8 @@ static uint32_t boardScanGetFenAt = 0;
 static constexpr uint32_t BOARD_SCAN_WAIT_MS = 1000;
 static uint32_t lastLinkHealthCheckAt = 0;
 static constexpr uint32_t LINK_HEALTH_CHECK_MS = 1000;
+static bool btScanDisplayPending = false;
+static uint32_t btScanDisplayAt = 0;
 
 static bool cynusWaitingForMove = false;
 static bool cynusEngineOffCommandSent = false;
@@ -683,14 +685,16 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                             boardSynced=true;
                             boardSyncPurpose=BOARD_SYNC_NONE;
                             initialStartupComplete=true;
+                            cynusDisplay("POS OK");
+                            Serial.println("[DISPLAY] POS OK");
 
                             Serial.printf("[STARTUP] valid %s initial position confirmed; Cynus phase complete\n", orientation==1?"flipped":"normal");
 
                             if (!clConnected) {
                                 setState(WAIT_CHESSLINK);
-                                cynusDisplay("BT Scan");
-                                Serial.println("[DISPLAY] BT Scan: Cynus board and flip confirmed, scanning for ChessLink");
-                                startChessLinkAdvertising();
+                                btScanDisplayPending=true;
+                                btScanDisplayAt=millis()+2000;
+                                Serial.println("[DISPLAY] POS OK: waiting 2 seconds before BT Scan");
                             } else {
                                 engineSide = startOrientationFlipped ? ENGINE_SIDE_WHITE : ENGINE_SIDE_BLACK;
                                 setState(RUNNING);
@@ -818,7 +822,7 @@ static bool connectCynus() {
     cynusReady=true; Serial.printf("[CYNUS] connected %s\n",cynusDev->getName().c_str());
     cynusExternalModeConfirmed=false; cynusEngineOffCommandSent=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false;
     boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; boardSynced=false; engineSide=ENGINE_SIDE_UNKNOWN;
-    startupFreshFenExpected=false; startupCorrectionMode=false; lastStartupFenEvaluated="";
+    startupFreshFenExpected=false; startupCorrectionMode=false; lastStartupFenEvaluated=""; btScanDisplayPending=false;
     if (sendCynus("set internal engine off\n")) { Serial.println("[CYNUS] internal engine OFF command #1 sent"); engineOffSentAt=millis(); cynusEngineOffSecondSendPending=true; chessAdvertisingPendingAfterEngineOff=true; }
     return true;
 }
@@ -841,7 +845,7 @@ static void recoverChessLinkLoss(const char*) {
 static void recoverCynusLoss(const char*) {
     cynusReady=false; cynusChr=nullptr; cynusDev=nullptr; boardSynced=false; fenNow=""; bufferedFen=""; lastFenSentToChessLink=""; correctionFenCandidate="";
     displayPlayPending=false; engineSide=ENGINE_SIDE_UNKNOWN; boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; cynusWaitingForMove=false;
-    startupFreshFenExpected=false; startupCorrectionMode=false; publishNextFenToChessLink=false; cynusEngineOffCommandSent=false; cynusExternalModeConfirmed=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false;
+    startupFreshFenExpected=false; startupCorrectionMode=false; publishNextFenToChessLink=false; cynusEngineOffCommandSent=false; cynusExternalModeConfirmed=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false; btScanDisplayPending=false;
     stopChessLinkAdvertising(); clConnected=false; clNotify=false; clConnHandle=BLE_HS_CONN_HANDLE_NONE; clBuf=""; setState(SEARCH_CYNUS); nextCynusScanAt=millis()+500;
 }
 
@@ -911,6 +915,12 @@ static void cynuslinkCoreLoop() {
     if (clProcessPending) { clProcessPending=false; processCL(); }
     if (clStatusPending) { clStatusPending=false; sendStatus(); }
     processSupervision();
+    if (btScanDisplayPending && cynusReady && !clConnected && state==WAIT_CHESSLINK && (int32_t)(millis()-btScanDisplayAt)>=0) {
+        btScanDisplayPending=false;
+        cynusDisplay("BT Scan");
+        Serial.println("[DISPLAY] BT Scan: POS OK shown for 2 seconds, scanning for ChessLink");
+        startChessLinkAdvertising();
+    }
     if (displayPlayPending && cynusReady && clConnected && (int32_t)(millis()-displayPlayAt)>=0) { displayPlayPending=false; cynusDisplay("play"); }
     if (cynusEngineOffSecondSendPending && cynusReady && millis()-engineOffSentAt>=300) {
         cynusEngineOffSecondSendPending=false;
