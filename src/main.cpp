@@ -786,7 +786,8 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                         } else Serial.println("[RECOVERY] current physical position refreshed");
                         if (!clConnected) {
                             setState(WAIT_CHESSLINK);
-                            cynusDisplay("search");
+                            cynusDisplay("BT Scan");
+                            Serial.println("[DISPLAY] BT Scan: valid board confirmed, scanning for ChessLink");
                             startChessLinkAdvertising();
                         } else {
                             setState(RUNNING);
@@ -936,7 +937,7 @@ static bool connectCynus() {
     }
     cynusReady = true;
     Serial.printf("[CYNUS] connected %s\n", cynusDev->getName().c_str());
-    cynusDisplay("search");
+    Serial.println("[DISPLAY] waiting for a valid initial board before ChessLink scan");
     cynusExternalModeConfirmed = false;
     cynusEngineOffCommandSent = false;
     cynusEngineOffSecondSendPending = false;
@@ -979,7 +980,7 @@ static void recoverChessLinkLoss(const char* source) {
     Serial.printf("[RECOVERY] ChessLink loss detected by %s\n", source);
     if (cynusReady) {
         displayPlayPending = false;
-        cynusDisplay("search");
+        Serial.println("[DISPLAY] ChessLink lost; validating board before restarting BT scan");
     }
     stopChessLinkAdvertising();
     clConnected = false;
@@ -1059,8 +1060,8 @@ static void processSupervision() {
             setMoveCycle(WAIT_HUMAN_MOVE);
             Serial.println("[CHESS] connected to synchronized board; gateway RUNNING");
             displayPlayPending = false;
-            cynusDisplay("ready");
-            Serial.println("[DISPLAY] READY held until Cynus confirms external-engine mode");
+            cynusDisplay("Connect");
+            Serial.println("[DISPLAY] CONNECT held until Cynus confirms external-engine mode");
         } else {
             Serial.println("[CHESS] connect event without synchronized board; rejecting");
             chessRejectEventPending = true;
@@ -1356,7 +1357,6 @@ static void processStartOrientationPatch() {
             boardSynced = false;
             flippedBootGatePatch = true;
             stopChessLinkAdvertising();
-            cynusDisplay("search");
             Serial.println("[STARTPOS] flipped boot position accepted; waiting for Cynus get move before ChessLink");
         }
     }
@@ -1366,7 +1366,8 @@ static void processStartOrientationPatch() {
         boardSynced = true;
         setState(WAIT_CHESSLINK);
         setMoveCycle(WAIT_ENGINE_MOVE);
-        cynusDisplay("search");
+        cynusDisplay("BT Scan");
+        Serial.println("[DISPLAY] BT Scan: flipped board valid and Cynus ready");
         startChessLinkAdvertising();
         Serial.println("[STARTPOS] Cynus ready; ChessLink enabled for software-first opening");
     }
