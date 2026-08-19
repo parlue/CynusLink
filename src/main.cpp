@@ -104,6 +104,15 @@ static uint32_t displayPlayAt = 0;
 static uint8_t ee[256];
 static uint8_t led[81];
 
+// Millennium may update L repeatedly while the engine is still calculating.
+// Never drive Cynus from the first decodable L frame.  Keep the candidate
+// only while the *same* LED state remains stable; any different L frame,
+// including LEDs-off, replaces/cancels it.
+static String pendingLedMove = "";
+static String pendingLedFrame = "";
+static uint32_t pendingLedMoveSince = 0;
+static constexpr uint32_t LED_MOVE_STABLE_MS = 2500;
+
 static bool startOrientationLatched = false;
 static bool startOrientationFlipped = false;
 static bool openingStartPhase = false;
@@ -126,6 +135,7 @@ static void sendCL(const String& payload);
 static void sendStatus();
 static void processCL();
 static void handleCL(const String& frame);
+static void processPendingLedMove();
 static void setState(GatewayState s);
 static void requestBoardSync(BoardSyncPurpose purpose, uint32_t delayMs = 0);
 static void recoverChessLinkLoss(const char* source);
@@ -680,6 +690,43 @@ static bool extractMoveFromLCommand(String& uci) {
     return true;
 }
 
+static void clearPendingLedMove(const char* reason) {
+    if (pendingLedMove.length() && reason) {
+        Serial.printf("[CHESS LED] pending %s cancelled: %s\n", pendingLedMove.c_str(), reason);
+    }
+    pendingLedMove = "";
+    pendingLedFrame = "";
+    pendingLedMoveSince = 0;
+}
+
+static void armPendingLedMove(const String& uci, const String& frame) {
+    if (pendingLedMove == uci && pendingLedFrame == frame) return;
+    pendingLedMove = uci;
+    pendingLedFrame = frame;
+    pendingLedMoveSince = millis();
+    Serial.printf("[CHESS LED] candidate %s armed; waiting for stable final LED state\n", uci.c_str());
+}
+
+static void processPendingLedMove() {
+    if (!pendingLedMove.length()) return;
+    if (state != RUNNING || moveCycle != WAIT_ENGINE_MOVE || !cynusWaitingForMove || !cynusReady || !clConnected) {
+        clearPendingLedMove("gateway state changed");
+        return;
+    }
+    if ((uint32_t)(millis() - pendingLedMoveSince) < LED_MOVE_STABLE_MS) return;
+
+    String uci = pendingLedMove;
+    clearPendingLedMove(nullptr);
+    String displayMove = moveDisplayText(uci);
+    if (displayMove.length()) cynusDisplay(displayMove.c_str());
+    String cmd = "move " + uci + "\n";
+    if (sendCynus(cmd.c_str())) {
+        Serial.printf("[CHESS LED] stable final candidate accepted: %s\n", uci.c_str());
+        cynusWaitingForMove = false;
+        setMoveCycle(WAIT_ROBOT_POSITION);
+    }
+}
+
 static void handleCL(const String& f) {
     if (!valid(f)) return;
     switch (f[0]) {
@@ -703,10 +750,16 @@ static void handleCL(const String& f) {
             break;
         }
         case 'L': {
-            if (state != RUNNING || moveCycle != WAIT_ENGINE_MOVE) { sendCL("l"); break; }
+            if (state != RUNNING || moveCycle != WAIT_ENGINE_MOVE) { clearPendingLedMove("L outside engine wait"); sendCL("l"); break; }
             uint8_t slot; if (!hb(f[1], f[2], slot)) break;
             bool ok = true; for (int i=0;i<81;++i) if (!hb(f[3+i*2],f[4+i*2],led[i])) {ok=false;break;}
             if (!ok) break; sendCL("l");
+
+            String frameKey = f.substring(0, f.length() - 2);
+            if (pendingLedMove.length() && pendingLedFrame != frameKey) {
+                clearPendingLedMove("LED state changed before stabilization");
+            }
+
             String timeslotUci; int timeslotPly = -1;
             bool timeslotOk = extractTimeslotDiagnosticMove(timeslotUci, timeslotPly);
             String uci; bool legacyOk = extractMoveFromLCommand(uci);
@@ -717,9 +770,9 @@ static void handleCL(const String& f) {
                               timeslotOk ? timeslotPly : -1);
             }
             if (legacyOk && cynusWaitingForMove) {
-                String displayMove = moveDisplayText(uci); if (displayMove.length()) cynusDisplay(displayMove.c_str());
-                String cmd = "move " + uci + "\n";
-                if (sendCynus(cmd.c_str())) { cynusWaitingForMove=false; setMoveCycle(WAIT_ROBOT_POSITION); }
+                armPendingLedMove(uci, frameKey);
+            } else if (pendingLedMove.length() && pendingLedFrame == frameKey) {
+                clearPendingLedMove("current LED state no longer yields a move candidate");
             }
             break;
         }
@@ -1004,6 +1057,7 @@ static bool connectCynus() {
     cynusExternalModeConfirmed=false; cynusEngineOffCommandSent=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false;
     boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; boardSynced=false; engineSide=ENGINE_SIDE_UNKNOWN;
     startupFreshFenExpected=false; startupCorrectionMode=false; lastStartupFenEvaluated=""; btScanDisplayPending=false;
+    clearPendingLedMove(nullptr);
     if (sendCynus("set internal engine off\n")) { Serial.println("[CYNUS] internal engine OFF command #1 sent"); engineOffSentAt=millis(); cynusEngineOffSecondSendPending=true; chessAdvertisingPendingAfterEngineOff=true; }
     return true;
 }
@@ -1012,18 +1066,21 @@ static void stopChessLinkAdvertising() { if (!clServerStarted) return; chessAdve
 
 static void requestBoardSync(BoardSyncPurpose purpose, uint32_t delayMs) {
     if (!cynusReady) return;
+    clearPendingLedMove(nullptr);
     boardSyncPurpose=purpose; boardSynced=false; publishNextFenToChessLink=false; cynusWaitingForMove=false; if (initialStartupComplete) setMoveCycle(WAIT_HUMAN_MOVE); setState(SYNC_BOARD);
     if (purpose==BOARD_SYNC_STARTUP) { startupFreshFenExpected=false; startupCorrectionMode=false; lastStartupFenEvaluated=""; }
     boardSyncRequestPending=true; boardSyncRequestAt=millis()+delayMs; Serial.printf("[SYNC] board request queued purpose=%s\n",purpose==BOARD_SYNC_STARTUP?"STARTUP":"RECOVERY");
 }
 
 static void recoverChessLinkLoss(const char*) {
+    clearPendingLedMove(nullptr);
     stopChessLinkAdvertising(); clConnected=false; clNotify=false; clConnHandle=BLE_HS_CONN_HANDLE_NONE; clBuf=""; cynusWaitingForMove=false; publishNextFenToChessLink=false; setMoveCycle(WAIT_HUMAN_MOVE); lastAutoStatusAt=0;
     if (!cynusReady) { boardSynced=false; setState(SEARCH_CYNUS); return; }
     requestBoardSync(initialStartupComplete?BOARD_SYNC_RECOVERY:BOARD_SYNC_STARTUP,150);
 }
 
 static void recoverCynusLoss(const char*) {
+    clearPendingLedMove(nullptr);
     cynusReady=false; cynusChr=nullptr; cynusDev=nullptr; boardSynced=false; fenNow=""; bufferedFen=""; lastFenSentToChessLink=""; correctionFenCandidate="";
     displayPlayPending=false; engineSide=ENGINE_SIDE_UNKNOWN; boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; cynusWaitingForMove=false;
     startupFreshFenExpected=false; startupCorrectionMode=false; publishNextFenToChessLink=false; cynusEngineOffCommandSent=false; cynusExternalModeConfirmed=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false; btScanDisplayPending=false; lastAutoStatusAt=0;
@@ -1102,6 +1159,7 @@ static void cynuslinkCoreLoop() {
     if (cynusConnectPending) { cynusConnectPending=false; if (!connectCynus()) { cynusDev=nullptr; delay(1000); startCynusScan(); } }
     if (clProcessPending) { clProcessPending=false; processCL(); }
     if (clStatusPending) { clStatusPending=false; sendStatus(); }
+    processPendingLedMove();
     processSupervision();
     if (btScanDisplayPending && cynusReady && !clConnected && state==WAIT_CHESSLINK && (int32_t)(millis()-btScanDisplayAt)>=0) {
         btScanDisplayPending=false;
