@@ -23,71 +23,40 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Apply strict startup display flow
+      - name: Restore visible board scan status
         run: |
           python - <<'PY'
           from pathlib import Path
 
           p = Path('src/main.cpp')
           s = p.read_text()
-          changed = False
+          old = '''    if (boardSyncRequestPending && cynusReady && (int32_t)(millis() - boardSyncRequestAt) >= 0) {
+        boardSyncRequestPending = false;
+        Serial.println("[SYNC] starting physical board scan");
+        if (sendCynus("scan board\\n")) {'''
+          new = '''    if (boardSyncRequestPending && cynusReady && (int32_t)(millis() - boardSyncRequestAt) >= 0) {
+        boardSyncRequestPending = false;
+        displayPlayPending = false;
+        cynusDisplay("B Scan");
+        Serial.println("[DISPLAY] B Scan: scanning physical board before ChessLink");
+        Serial.println("[SYNC] starting physical board scan");
+        if (sendCynus("scan board\\n")) {'''
 
-          def replace_once(old, new, label):
-              global s, changed
-              if old in s:
-                  s = s.replace(old, new, 1)
-                  changed = True
-                  print('patched:', label)
-              elif new in s:
-                  print('already patched:', label)
-              else:
-                  raise SystemExit(f'Patch anchor not found: {label}')
-
-          # Do not claim we are scanning for ChessLink immediately after Cynus connects.
-          replace_once(
-              '    Serial.printf("[CYNUS] connected %s\\n", cynusDev->getName().c_str());\n    cynusDisplay("search");\n',
-              '    Serial.printf("[CYNUS] connected %s\\n", cynusDev->getName().c_str());\n    Serial.println("[DISPLAY] waiting for a valid initial board before ChessLink scan");\n',
-              'no BT scan display before board validation')
-
-          # A valid normal startup position is the point where ChessLink advertising starts.
-          replace_once(
-              '                        if (!clConnected) {\n                            setState(WAIT_CHESSLINK);\n                            cynusDisplay("search");\n                            startChessLinkAdvertising();\n',
-              '                        if (!clConnected) {\n                            setState(WAIT_CHESSLINK);\n                            cynusDisplay("BT Scan");\n                            Serial.println("[DISPLAY] BT Scan: valid board confirmed, scanning for ChessLink");\n                            startChessLinkAdvertising();\n',
-              'normal startup BT Scan display')
-
-          # ChessLink connected: display Connect until Cynus confirms external mode.
-          replace_once(
-              '            cynusDisplay("ready");\n            Serial.println("[DISPLAY] READY held until Cynus confirms external-engine mode");\n',
-              '            cynusDisplay("Connect");\n            Serial.println("[DISPLAY] CONNECT held until Cynus confirms external-engine mode");\n',
-              'ready to Connect')
-
-          # On ChessLink loss, do not show BT Scan before the recovery board scan succeeds.
-          replace_once(
-              '    if (cynusReady) {\n        displayPlayPending = false;\n        cynusDisplay("search");\n    }\n    stopChessLinkAdvertising();\n',
-              '    if (cynusReady) {\n        displayPlayPending = false;\n        Serial.println("[DISPLAY] ChessLink lost; validating board before restarting BT scan");\n    }\n    stopChessLinkAdvertising();\n',
-              'recovery board validation before BT Scan')
-
-          # Flipped startup: do not show BT Scan while still waiting for Cynus get move.
-          replace_once(
-              '            stopChessLinkAdvertising();\n            cynusDisplay("search");\n            Serial.println("[STARTPOS] flipped boot position accepted; waiting for Cynus get move before ChessLink");\n',
-              '            stopChessLinkAdvertising();\n            Serial.println("[STARTPOS] flipped boot position accepted; waiting for Cynus get move before ChessLink");\n',
-              'flipped gate no premature BT Scan')
-
-          # Once flipped startup is actually ready to expose ChessLink, show BT Scan.
-          replace_once(
-              '        setState(WAIT_CHESSLINK);\n        setMoveCycle(WAIT_ENGINE_MOVE);\n        cynusDisplay("search");\n        startChessLinkAdvertising();\n',
-              '        setState(WAIT_CHESSLINK);\n        setMoveCycle(WAIT_ENGINE_MOVE);\n        cynusDisplay("BT Scan");\n        Serial.println("[DISPLAY] BT Scan: flipped board valid and Cynus ready");\n        startChessLinkAdvertising();\n',
-              'flipped startup BT Scan display')
-
-          if changed:
+          if old in s:
+              s = s.replace(old, new, 1)
               p.write_text(s)
+              print('patched: visible B Scan status')
+          elif new in s:
+              print('already patched')
+          else:
+              raise SystemExit('Patch anchor not found for board scan status')
           PY
 
           if ! git diff --quiet -- src/main.cpp; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add src/main.cpp
-            git commit -m 'Require valid board before ChessLink scan [skip ci]'
+            git commit -m 'Restore board scan display [skip ci]'
             git push
           fi
 
