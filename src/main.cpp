@@ -77,6 +77,9 @@ static volatile bool cynusDisconnectEventPending = false;
 static uint32_t nextCynusScanAt = 0;
 static uint32_t boardSyncRequestAt = 0;
 static bool boardSyncRequestPending = false;
+        displayPlayPending = false;
+        cynusDisplay("B Scan");
+        Serial.println("[DISPLAY] B Scan: scanning physical board before ChessLink");
 static bool boardScanPending = false;
 static uint32_t boardScanGetFenAt = 0;
 static constexpr uint32_t BOARD_SCAN_WAIT_MS = 1000;
@@ -944,6 +947,9 @@ static bool connectCynus() {
     chessAdvertisingPendingAfterEngineOff = false;
     boardSyncPurpose = BOARD_SYNC_NONE;
     boardSyncRequestPending = false;
+        displayPlayPending = false;
+        cynusDisplay("B Scan");
+        Serial.println("[DISPLAY] B Scan: scanning physical board before ChessLink");
     boardScanPending = false;
     boardSynced = false;
     engineSide = ENGINE_SIDE_UNKNOWN;
@@ -1013,6 +1019,9 @@ static void recoverCynusLoss(const char* source) {
     engineSide = ENGINE_SIDE_UNKNOWN;
     boardSyncPurpose = BOARD_SYNC_NONE;
     boardSyncRequestPending = false;
+        displayPlayPending = false;
+        cynusDisplay("B Scan");
+        Serial.println("[DISPLAY] B Scan: scanning physical board before ChessLink");
     boardScanPending = false;
     cynusWaitingForMove = false;
     publishNextFenToChessLink = false;
@@ -1069,6 +1078,9 @@ static void processSupervision() {
     }
     if (boardSyncRequestPending && cynusReady && (int32_t)(millis() - boardSyncRequestAt) >= 0) {
         boardSyncRequestPending = false;
+        displayPlayPending = false;
+        cynusDisplay("B Scan");
+        Serial.println("[DISPLAY] B Scan: scanning physical board before ChessLink");
         Serial.println("[SYNC] starting physical board scan");
         if (sendCynus("scan board\n")) {
             boardScanPending = true;
@@ -1349,6 +1361,9 @@ static void processStartOrientationPatch() {
             initialStartupComplete = true;
             boardSyncPurpose = BOARD_SYNC_NONE;
             boardSyncRequestPending = false;
+        displayPlayPending = false;
+        cynusDisplay("B Scan");
+        Serial.println("[DISPLAY] B Scan: scanning physical board before ChessLink");
             boardScanPending = false;
             publishNextFenToChessLink = false;
             correctionFenCandidate = "";
