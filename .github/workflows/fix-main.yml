@@ -1,0 +1,16 @@
+name: Fix main source
+on:
+  push:
+    branches: [ main ]
+    paths: [ '.github/workflows/fix-main.yml' ]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clean misplaced B Scan blocks
+        run: python -c "from pathlib import Path; p=Path('src/main.cpp'); s=p.read_text(); b='        displayPlayPending = false;\\n        cynusDisplay(\"B Scan\");\\n        Serial.println(\"[DISPLAY] B Scan: scanning physical board before ChessLink\");\\n'; s=s.replace(b,''); a='        boardSyncRequestPending = false;\\n        Serial.println(\"[SYNC] starting physical board scan\");'; n='        boardSyncRequestPending = false;\\n        displayPlayPending = false;\\n        cynusDisplay(\"B Scan\");\\n        Serial.println(\"[DISPLAY] B Scan: scanning physical board before ChessLink\");\\n        Serial.println(\"[SYNC] starting physical board scan\");'; assert a in s; s=s.replace(a,n,1); p.write_text(s)"
+      - name: Commit corrected source
+        run: git config user.name github-actions[bot] && git config user.email 41898282+github-actions[bot]@users.noreply.github.com && git add src/main.cpp && git diff --cached --quiet || (git commit -m 'Fix misplaced B Scan display statements [skip ci]' && git push)
