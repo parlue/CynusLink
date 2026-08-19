@@ -1,11 +1,10 @@
-name: Sync CynusLink source patch
+name: Final CynusLink source sync
 
 on:
   push:
     branches: [ main ]
     paths:
       - '.github/workflows/build-firmware.yml'
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore visible board scan status
+      - name: Patch main.cpp and remove this workflow
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -40,15 +39,14 @@ jobs:
               p.write_text(s)
               print('patched: visible B Scan status')
           elif new in s:
-              print('already patched')
+              print('main.cpp already patched')
           else:
               raise SystemExit('Patch anchor not found for board scan status')
           PY
 
-          if ! git diff --quiet -- src/main.cpp; then
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add src/main.cpp
-            git commit -m 'Restore board scan display [skip ci]'
-            git push
-          fi
+          rm -f .github/workflows/build-firmware.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A src/main.cpp .github/workflows/build-firmware.yml
+          git commit -m 'Restore board scan display and remove auto workflow [skip ci]'
+          git push
