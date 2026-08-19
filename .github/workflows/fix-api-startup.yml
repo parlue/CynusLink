@@ -1,0 +1,41 @@
+name: Fix API startup
+on:
+  push:
+    branches: [ main ]
+    paths: [ '.github/workflows/fix-api-startup.yml' ]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore API-first startup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/main.cpp')
+          s = p.read_text()
+          old = '''    Serial.printf("[CYNUS] connected %s\\n", cynusDev->getName().c_str());
+    displayPlayPending = false;
+    cynusDisplay("B Scan");
+    Serial.println("[DISPLAY] B Scan: Cynus connected, preparing physical board scan");
+    cynusExternalModeConfirmed = false;
+'''
+          new = '''    Serial.printf("[CYNUS] connected %s\\n", cynusDev->getName().c_str());
+    Serial.println("[STARTUP] Cynus connected; enabling external API before board scan");
+    cynusExternalModeConfirmed = false;
+'''
+          if old not in s:
+              raise SystemExit('startup display block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+      - name: Commit source
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/main.cpp
+          git diff --cached --quiet || (git commit -m 'Restore API-first active board scan [skip ci]' && git push)
