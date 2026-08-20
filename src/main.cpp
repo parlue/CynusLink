@@ -948,20 +948,18 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                                     startupCorrectionMode=true;
                                     continue;
                                 }
-                                firstMoveFlipOn=true;
-                                Serial.println("[STARTUP] flipped initial position detected -> flip board ON sent; first-move gate remains active");
-                            }
+                                const bool startupFlipOn = (orientation == 1);
 
-                            const bool startupFlipOn = (orientation == 1);
-                            if (!sendCynus(startupFlipOn ? "set flip board on\n" : "set flip board off\n")) {
-                                Serial.printf("[STARTUP] set flip board %s BLE write failed; startup remains gated\n", startupFlipOn ? "ON" : "OFF");
-                                startupFreshFenExpected=false;
-                                startupCorrectionMode=true;
-                                continue;
-                            }
-                            firstMoveFlipOn=startupFlipOn;
-                            Serial.printf("[STARTUP] initial position -> flip board %s sent; no ACK expected\n", startupFlipOn ? "ON" : "OFF");
-
+                                sendCynus(startupFlipOn
+                                    ? "set flip board on\n"
+                                    : "set flip board off\n");
+                                
+                                firstMoveFlipOn = startupFlipOn;
+                                
+                                Serial.printf(
+                                    "[STARTUP] initial position -> flip board %s sent; no ACK expected\n",
+                                    startupFlipOn ? "ON" : "OFF"
+                                );
                             boardSyncRequestPending=false;
                             boardScanPending=false;
                             startupFreshFenExpected=false;
