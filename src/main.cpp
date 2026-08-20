@@ -941,12 +941,15 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                         int orientation=orientationOfFen(placement);
 
                         if (boardSyncPurpose==BOARD_SYNC_STARTUP) {
-                            if (orientation<0) {
-                                startupFreshFenExpected=false;
-                                startupCorrectionMode=true;
-                                Serial.printf("[STARTUP] board not ready: %s\n",bufferedFen.c_str());
-                                Serial.println("[STARTUP] waiting for initial position; correct board and press Cynus scan");
-                                continue;
+                            if (orientation == 1) {
+                                if (!sendCynus("set flip board on\n")) {
+                                    Serial.println("[STARTUP] flipped initial position detected, but flip board ON failed; startup remains gated");
+                                    startupFreshFenExpected=false;
+                                    startupCorrectionMode=true;
+                                    continue;
+                                }
+                                firstMoveFlipOn=true;
+                                Serial.println("[STARTUP] flipped initial position detected -> flip board ON sent; first-move gate remains active");
                             }
 
                             const bool startupFlipOn = (orientation == 1);
