@@ -1,15 +1,15 @@
 name: one-shot-startup-flip
 
 on:
-  push:
-    paths:
-      - '.github/workflows/one-shot-startup-flip.yml'
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
 
 jobs:
   patch:
+    if: github.event.issue.title == 'run-startup-flip-patch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
