@@ -47,3 +47,4 @@ jobs:
           git add src/main.cpp
           git commit -m "fix: initialize Cynus flip at startup"
           git push
+# trigger
