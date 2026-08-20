@@ -948,18 +948,18 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                                     startupCorrectionMode=true;
                                     continue;
                                 }
-                                const bool startupFlipOn = (orientation == 1);
+                            const bool startupFlipOn = (orientation == 1);
 
-                                sendCynus(startupFlipOn
-                                    ? "set flip board on\n"
-                                    : "set flip board off\n");
-                                
-                                firstMoveFlipOn = startupFlipOn;
-                                
-                                Serial.printf(
-                                    "[STARTUP] initial position -> flip board %s sent; no ACK expected\n",
-                                    startupFlipOn ? "ON" : "OFF"
-                                );
+                            sendCynus(startupFlipOn
+                                ? "set flip board on\n"
+                                : "set flip board off\n");
+                            
+                            firstMoveFlipOn = startupFlipOn;
+                            
+                            Serial.printf(
+                                "[STARTUP] initial position -> flip board %s sent; no ACK expected\n",
+                                startupFlipOn ? "ON" : "OFF"
+                            );
                             boardSyncRequestPending=false;
                             boardScanPending=false;
                             startupFreshFenExpected=false;
