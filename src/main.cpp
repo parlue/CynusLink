@@ -941,25 +941,24 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                         int orientation=orientationOfFen(placement);
 
                         if (boardSyncPurpose==BOARD_SYNC_STARTUP) {
-                            if (orientation == 1) {
-                                if (!sendCynus("set flip board on\n")) {
-                                    Serial.println("[STARTUP] flipped initial position detected, but flip board ON failed; startup remains gated");
-                                    startupFreshFenExpected=false;
-                                    startupCorrectionMode=true;
-                                    continue;
-                                }
-                            const bool startupFlipOn = (orientation == 1);
+                            if (orientation<0) {
+                                startupFreshFenExpected=false;
+                                startupCorrectionMode=true;
+                                Serial.printf("[STARTUP] board not ready: %s\n",bufferedFen.c_str());
+                                Serial.println("[STARTUP] waiting for initial position; correct board and press Cynus scan");
+                                continue;
+                            }
 
-                            sendCynus(startupFlipOn
-                                ? "set flip board on\n"
-                                : "set flip board off\n");
-                            
-                            firstMoveFlipOn = startupFlipOn;
-                            
-                            Serial.printf(
-                                "[STARTUP] initial position -> flip board %s sent; no ACK expected\n",
-                                startupFlipOn ? "ON" : "OFF"
-                            );
+                            const bool startupFlipOn = (orientation == 1);
+                            if (!sendCynus(startupFlipOn ? "set flip board on\n" : "set flip board off\n")) {
+                                Serial.printf("[STARTUP] set flip board %s BLE write failed; startup remains gated\n", startupFlipOn ? "ON" : "OFF");
+                                startupFreshFenExpected=false;
+                                startupCorrectionMode=true;
+                                continue;
+                            }
+                            firstMoveFlipOn=startupFlipOn;
+                            Serial.printf("[STARTUP] initial position -> flip board %s sent; no ACK expected\n", startupFlipOn ? "ON" : "OFF");
+
                             boardSyncRequestPending=false;
                             boardScanPending=false;
                             startupFreshFenExpected=false;
