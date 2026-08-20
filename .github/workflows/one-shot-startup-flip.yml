@@ -1,0 +1,25 @@
+name: one-shot-startup-flip
+
+on:
+  push:
+    paths:
+      - '.github/workflows/one-shot-startup-flip.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply startup flip patch
+        run: python3 .github/scripts/patch_startup_flip.py
+      - name: Commit startup flip patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.cpp
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: initialize Cynus flip at startup"
+          git push
