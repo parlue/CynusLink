@@ -1,0 +1,51 @@
+name: Apply isolated piece controls
+
+on:
+  push:
+    branches: [piece-controls]
+    paths: [.github/workflows/apply-piece-controls.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: piece-controls
+      - name: Patch src/main.cpp
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/main.cpp')
+          s = p.read_text()
+
+          old = '''static bool firstMoveOrientationLocked = false;\nstatic bool firstMoveFlipOn = false;\n\nstatic constexpr const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";\nstatic constexpr const char* FLIPPED_START_FEN = "RNBKQBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbkqbnr";\nstatic constexpr const char* SOUND_OFF_FEN = "rnbq1bnr/pppppppp/8/4k3/8/8/PPPPPPPP/RNBQKBNR";\nstatic constexpr const char* SOUND_ON_FEN = "rnbq1bnr/pppppppp/4k3/8/8/8/PPPPPPPP/RNBQKBNR";'''
+          new = '''static bool firstMoveOrientationLocked = false;\nstatic bool firstMoveFlipOn = false;\nstatic bool analysisEnabled = false;\n\nstatic constexpr const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";\nstatic constexpr const char* FLIPPED_START_FEN = "RNBKQBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbkqbnr";\nstatic constexpr const char* SOUND_OFF_FEN = "rnbq1bnr/pppppppp/8/4k3/8/8/PPPPPPPP/RNBQKBNR";\nstatic constexpr const char* SOUND_ON_FEN = "rnbq1bnr/pppppppp/4k3/8/8/8/PPPPPPPP/RNBQKBNR";\nstatic constexpr const char* FLIP_ON_FEN = "rnbq1bnr/pppppppp/8/7k/8/8/PPPPPPPP/RNBQKBNR";\nstatic constexpr const char* FLIP_OFF_FEN = "rnbq1bnr/pppppppp/7k/8/8/8/PPPPPPPP/RNBQKBNR";\nstatic constexpr const char* ANALYSIS_ON_FEN = "rnbq1bnr/pppppppp/8/3k4/8/8/PPPPPPPP/RNBQKBNR";\nstatic constexpr const char* ANALYSIS_OFF_FEN = "rnbq1bnr/pppppppp/3k4/8/8/8/PPPPPPPP/RNBQKBNR";'''
+          assert old in s, 'constants anchor not found'
+          s = s.replace(old, new, 1)
+
+          anchor = '''static bool handleSoundConfigFen(String f) {\n'''
+          insert = '''static bool handlePieceConfigFen(String f) {\n    int sp = f.indexOf(' ');\n    if (sp >= 0) f = f.substring(0, sp);\n\n    bool flipOn = f == FLIP_ON_FEN;\n    bool flipOff = f == FLIP_OFF_FEN;\n    bool analysisOn = f == ANALYSIS_ON_FEN;\n    bool analysisOff = f == ANALYSIS_OFF_FEN;\n    if (!flipOn && !flipOff && !analysisOn && !analysisOff) return false;\n\n    publishNextFenToChessLink = false;\n    correctionFenCandidate = "";\n    boardSynced = fenNow.length() > 0;\n    cynusWaitingForMove = true;\n    displayPlayPending = false;\n\n    if (flipOn || flipOff) {\n        const char* command = flipOn ? "set flip board on\\n" : "set flip board off\\n";\n        if (!sendCynus(command)) return true;\n        Serial.printf("[CONFIG] manual flip %s selected with black king; config FEN suppressed from ChessLink\\n", flipOn ? "ON" : "OFF");\n        return true;\n    }\n\n    analysisEnabled = analysisOn;\n    cynusDisplay(analysisEnabled ? "Analyse" : "play");\n    Serial.printf("[CONFIG] analysis %s selected with black king; config FEN suppressed from ChessLink\\n", analysisEnabled ? "ON" : "OFF");\n    return true;\n}\n\n'''
+          assert anchor in s, 'handler anchor not found'
+          s = s.replace(anchor, insert + anchor, 1)
+
+          old_call = '''                if (initialStartupComplete && state==RUNNING && clConnected && moveCycle==WAIT_HUMAN_MOVE && handleSoundConfigFen(f)) continue;'''
+          new_call = '''                if (initialStartupComplete && state==RUNNING && clConnected &&\n                    (moveCycle==WAIT_HUMAN_MOVE || moveCycle==WAIT_FIRST_MOVE) && handlePieceConfigFen(f)) continue;\n                if (initialStartupComplete && state==RUNNING && clConnected && moveCycle==WAIT_HUMAN_MOVE && handleSoundConfigFen(f)) continue;'''
+          assert old_call in s, 'FEN dispatch anchor not found'
+          s = s.replace(old_call, new_call, 1)
+
+          p.write_text(s)
+      - name: Verify isolated changes
+        run: |
+          git diff --check
+          grep -n "FLIP_ON_FEN\|ANALYSIS_ON_FEN\|handlePieceConfigFen\|analysisEnabled" src/main.cpp
+      - name: Commit patch
+        run: |
+          git config user.name "CynusLink automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -- src/main.cpp
+          git commit -m "Add isolated black-king piece controls"
+          git push origin HEAD:piece-controls
