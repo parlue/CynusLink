@@ -89,6 +89,8 @@ static uint32_t boardSyncRequestAt = 0;
 static bool boardSyncRequestPending = false;
 static bool boardScanPending = false;
 static bool startupFreshFenExpected = false;
+static uint32_t startupFreshFenExpectedAt = 0;
+static constexpr uint32_t STARTUP_FEN_TIMEOUT_MS = 2500;
 static bool startupCorrectionMode = false;
 static uint32_t boardScanGetFenAt = 0;
 static constexpr uint32_t BOARD_SCAN_WAIT_MS = 1000;
@@ -98,6 +100,7 @@ static bool btScanDisplayPending = false;
 static uint32_t btScanDisplayAt = 0;
 
 static bool cynusWaitingForMove = false;
+static bool getMovePendingUntilChessLink = false;
 static bool cynusEngineOffCommandSent = false;
 static bool cynusExternalModeConfirmed = false;
 static uint32_t engineOffSentAt = 0;
@@ -135,7 +138,8 @@ static bool sendCynus(const char* s);
 static void cynusDisplay(const char* text);
 static void schedulePlayDisplay(uint32_t delayMs = 1800);
 static String moveDisplayText(const String& uci);
-static String inferMoveDisplayText(const String& oldFen, const String& newFen);
+static String inferMoveDisplayText(const String& oldFen, const String& newFen, String* scanError = nullptr);
+static bool plausibleBoardMove(int source, int destination, EngineSide requiredSide);
 static void createChessLinkServer();
 static void startChessLinkAdvertising();
 static void stopChessLinkAdvertising();
@@ -364,6 +368,8 @@ static bool handlePieceConfigFen(String f) {
     if (flipOn || flipOff) {
         const char* command = flipOn ? "set flip board on\n" : "set flip board off\n";
         if (!sendCynus(command)) return true;
+        cynusDisplay(flipOn ? "flip on" : "flip off");
+        schedulePlayDisplay(3500);
         Serial.printf("[CONFIG] manual flip %s selected with black king; config FEN suppressed from ChessLink\n", flipOn ? "ON" : "OFF");
         return true;
     }
@@ -522,22 +528,90 @@ static String moveDisplayText(const String& uci) {
     return "";
 }
 
-static String inferMoveDisplayText(const String& oldFen, const String& newFen) {
+static String inferMoveDisplayText(const String& oldFen, const String& newFen, String* scanError) {
     if (!oldFen.length() || !newFen.length()) return "";
     char oldB[65], newB[65];
     if (!fenPlacementTo64(oldFen, oldB) || !fenPlacementTo64(newFen, newB)) return "";
-    int source = -1, destination = -1;
-    for (int i = 0; i < 64; ++i) if (oldB[i] != newB[i] && oldB[i] != '.' && newB[i] == '.') { source = i; break; }
-    if (source < 0) return "";
-    char mover = oldB[source];
-    bool white = mover >= 'A' && mover <= 'Z';
-    for (int i = 0; i < 64; ++i) {
-        if (oldB[i] == newB[i] || newB[i] == '.') continue;
-        bool sameSide = white ? (newB[i] >= 'A' && newB[i] <= 'Z') : (newB[i] >= 'a' && newB[i] <= 'z');
-        if (sameSide && i != source) { destination = i; break; }
+    char savedBoard[65];
+    memcpy(savedBoard, board64, sizeof(savedBoard));
+    memcpy(board64, oldB, sizeof(board64));
+    int foundSource = -1, foundDestination = -1, matches = 0;
+    int bestMismatch = 65, bestMismatchCount = 0;
+    char bestExpected[65] = {0};
+
+    for (int source = 0; source < 64; ++source) {
+        char mover = oldB[source];
+        if (mover == '.') continue;
+        bool white = mover >= 'A' && mover <= 'Z';
+        for (int destination = 0; destination < 64; ++destination) {
+            if (destination == source || newB[destination] == '.') continue;
+            bool destinationSameSide = white ? (newB[destination] >= 'A' && newB[destination] <= 'Z')
+                                             : (newB[destination] >= 'a' && newB[destination] <= 'z');
+            if (!destinationSameSide) continue;
+
+            char simulated[65];
+            memcpy(simulated, oldB, sizeof(simulated));
+            simulated[source] = '.';
+            simulated[destination] = newB[destination];
+
+            int sf = source % 8, sr = source / 8;
+            int df = destination % 8, dr = destination / 8;
+            char lowerMover = (char)tolower((unsigned char)mover);
+            bool enPassant = lowerMover == 'p' && sf != df && oldB[destination] == '.';
+            if (enPassant) {
+                int dir = white ? -1 : 1;
+                char captured = oldB[sr * 8 + df];
+                bool capturedOpponentPawn = white ? captured == 'p' : captured == 'P';
+                if (abs(df - sf) != 1 || dr - sr != dir || !capturedOpponentPawn) continue;
+            } else if (!plausibleBoardMove(source, destination, ENGINE_SIDE_UNKNOWN)) {
+                continue;
+            }
+
+            // En passant removes the pawn beside the destination square.
+            if (enPassant) {
+                simulated[sr * 8 + df] = '.';
+            }
+
+            // Castling also moves the rook.
+            if (lowerMover == 'k' && sr == dr && abs(df - sf) == 2) {
+                int rookSource = sr * 8 + (df > sf ? 7 : 0);
+                int rookDestination = sr * 8 + (df > sf ? df - 1 : df + 1);
+                simulated[rookDestination] = simulated[rookSource];
+                simulated[rookSource] = '.';
+            }
+
+            int mismatch = 0;
+            for (int i = 0; i < 64; ++i) if (simulated[i] != newB[i]) ++mismatch;
+            if (mismatch < bestMismatch) {
+                bestMismatch=mismatch;
+                bestMismatchCount=1;
+                memcpy(bestExpected,simulated,sizeof(bestExpected));
+            } else if (mismatch == bestMismatch) {
+                ++bestMismatchCount;
+            }
+            if (mismatch != 0) continue;
+            foundSource = source;
+            foundDestination = destination;
+            ++matches;
+        }
     }
-    if (destination < 0) return "";
-    String uci = squareName(source % 8, source / 8) + squareName(destination % 8, destination / 8);
+
+    memcpy(board64, savedBoard, sizeof(board64));
+    if (matches != 1) {
+        if (scanError && bestMismatchCount == 1 && bestMismatch > 0) {
+            String issues[2];
+            int count=0;
+            for (int i = 0; i < 64 && count < 2; ++i) {
+                if (newB[i] == bestExpected[i]) continue;
+                if (newB[i] == '.') issues[count++]="-"+startupSquare(i);
+                else issues[count++]="+"+startupSquare(i);
+            }
+            if (count == 1) *scanError=issues[0];
+            else if (count == 2) *scanError=issues[0]+"/"+issues[1];
+        }
+        return "";
+    }
+    String uci = squareName(foundSource % 8, foundSource / 8) + squareName(foundDestination % 8, foundDestination / 8);
     return moveDisplayText(uci);
 }
 
@@ -885,7 +959,12 @@ static void cynusBytes(const uint8_t* data, size_t len) {
 
             if (line.equalsIgnoreCase("get move")) {
                 if (!(cynusReady && clConnected)) {
-                    Serial.println("[GATEWAY] get move ignored until ChessLink is connected");
+                    if (cynusReady && state==WAIT_CHESSLINK) {
+                        getMovePendingUntilChessLink=true;
+                        Serial.println("[GATEWAY] get move queued until ChessLink is connected");
+                    } else {
+                        Serial.println("[GATEWAY] get move ignored until ChessLink is connected");
+                    }
                     continue;
                 }
 
@@ -905,10 +984,18 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                     cynusDisplay("play");
                     sendCynus("get fen\n");
                 } else {
-                    if (correctionFenCandidate.length() && correctionFenCandidate != lastFenSentToChessLink && fen2board(correctionFenCandidate)) {
-                        fenNow=correctionFenCandidate;
-                        boardSynced=true;
-                        if (autoReport()) clStatusPending=true;
+                    if (correctionFenCandidate.length()) {
+                        if (correctionFenCandidate == lastFenSentToChessLink) {
+                            fenNow=correctionFenCandidate;
+                            boardSynced=fen2board(fenNow);
+                            lastGameErrorDisplay="";
+                            cynusDisplay("play");
+                            clStatusPending=true;
+                            Serial.println("[BOARD] physical position confirmed; valid status queued for ChessLink");
+                        } else {
+                            fen2board(fenNow);
+                            Serial.println("[BOARD] rejected correction FEN; error position not sent to ChessLink");
+                        }
                     }
                     correctionFenCandidate="";
                 }
@@ -1003,17 +1090,29 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                     }
 
                     if (state==RUNNING && clConnected && publishNextFenToChessLink) {
+                        String previousAcceptedFen=fenNow;
+                        String scanError;
+                        String humanDisplayMove=inferMoveDisplayText(previousAcceptedFen,bufferedFen,&scanError);
+                        if (!humanDisplayMove.length()) {
+                            correctionFenCandidate=bufferedFen;
+                            fen2board(previousAcceptedFen);
+                            displayPlayPending=false;
+                            cynusDisplay(scanError.length() ? scanError.c_str() : "scan err");
+                            sendCynus("play audio error\n");
+                            Serial.println("[BOARD] rejected FEN: not exactly one complete move from confirmed position");
+                            continue;
+                        }
                         if (moveCycle==WAIT_FIRST_MOVE && !firstMoveOrientationLocked) {
                             if (!lockFirstMoveOrientation(false)) {
                                 Serial.println("[FIRST MOVE] human move held; flip OFF must succeed before forwarding to ChessLink");
                                 continue;
                             }
                         }
-                        String previousAcceptedFen=fenNow;
                         fenNow=bufferedFen;
                         boardSynced=true;
                         publishNextFenToChessLink=false;
-                        String humanDisplayMove=inferMoveDisplayText(previousAcceptedFen,fenNow);
+                        correctionFenCandidate="";
+                        lastGameErrorDisplay="";
                         if (humanDisplayMove.length()) { cynusDisplay(humanDisplayMove.c_str()); schedulePlayDisplay(1400); }
                         if (autoReport()) clStatusPending=true;
                         setMoveCycle(WAIT_ENGINE_MOVE);
@@ -1022,6 +1121,7 @@ static void cynusBytes(const uint8_t* data, size_t len) {
 
                     if (state==RUNNING && clConnected && moveCycle==WAIT_ENGINE_MOVE) {
                         correctionFenCandidate=bufferedFen;
+                        fen2board(fenNow);
                         continue;
                     }
 
@@ -1126,7 +1226,7 @@ static void requestBoardSync(BoardSyncPurpose purpose, uint32_t delayMs) {
     if (!cynusReady) return;
     clearPendingLedMove(nullptr);
     boardSyncPurpose=purpose; boardSynced=false; publishNextFenToChessLink=false; cynusWaitingForMove=false; if (initialStartupComplete) setMoveCycle(firstMoveOrientationLocked ? WAIT_HUMAN_MOVE : WAIT_FIRST_MOVE); setState(SYNC_BOARD);
-    if (purpose==BOARD_SYNC_STARTUP) { startupFreshFenExpected=false; startupCorrectionMode=false; lastStartupFenEvaluated=""; }
+    if (purpose==BOARD_SYNC_STARTUP) { startupFreshFenExpected=false; startupFreshFenExpectedAt=0; startupCorrectionMode=false; bufferedFen=""; lastStartupFenEvaluated=""; }
     boardSyncRequestPending=true; boardSyncRequestAt=millis()+delayMs; Serial.printf("[SYNC] board request queued purpose=%s\n",purpose==BOARD_SYNC_STARTUP?"STARTUP":"RECOVERY");
 }
 
@@ -1141,7 +1241,7 @@ static void recoverCynusLoss(const char*) {
     clearPendingLedMove(nullptr);
     cynusReady=false; cynusChr=nullptr; cynusDev=nullptr; boardSynced=false; fenNow=""; bufferedFen=""; lastFenSentToChessLink=""; correctionFenCandidate="";
     displayPlayPending=false; if (!firstMoveOrientationLocked) engineSide=ENGINE_SIDE_UNKNOWN; boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; cynusWaitingForMove=false;
-    startupFreshFenExpected=false; startupCorrectionMode=false; publishNextFenToChessLink=false; cynusEngineOffCommandSent=false; cynusExternalModeConfirmed=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false; btScanDisplayPending=false; lastAutoStatusAt=0;
+    startupFreshFenExpected=false; startupCorrectionMode=false; publishNextFenToChessLink=false; getMovePendingUntilChessLink=false; cynusEngineOffCommandSent=false; cynusExternalModeConfirmed=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false; btScanDisplayPending=false; lastAutoStatusAt=0;
     stopChessLinkAdvertising(); clConnected=false; clNotify=false; clConnHandle=BLE_HS_CONN_HANDLE_NONE; clBuf=""; setState(SEARCH_CYNUS); nextCynusScanAt=millis()+500;
 }
 
@@ -1156,7 +1256,16 @@ static void processSupervision() {
             if (!firstMoveOrientationLocked) engineSide=ENGINE_SIDE_UNKNOWN;
             setState(RUNNING);
             setMoveCycle(firstMoveOrientationLocked ? WAIT_HUMAN_MOVE : WAIT_FIRST_MOVE);
+            if (getMovePendingUntilChessLink) {
+                getMovePendingUntilChessLink=false;
+                cynusWaitingForMove=true;
+                cynusExternalModeConfirmed=true;
+                publishNextFenToChessLink=true;
+                Serial.println("[GATEWAY] queued get move activated after ChessLink connect");
+            }
             cynusDisplay("Connect");
+            schedulePlayDisplay(1200);
+            Serial.println("[DISPLAY] Connect: switching to play after 1.2 seconds");
             Serial.println(firstMoveOrientationLocked ? "[FIRST MOVE] orientation already locked; resuming game" : "[FIRST MOVE] waiting to see whether Cynus or chess computer moves first");
             lastAutoStatusAt=0;
         }
@@ -1169,9 +1278,16 @@ static void processSupervision() {
     if (boardSyncRequestPending && cynusReady && state==SYNC_BOARD && boardSyncPurpose!=BOARD_SYNC_NONE && (int32_t)(millis()-boardSyncRequestAt)>=0) {
         boardSyncRequestPending=false; Serial.println("[SYNC] starting physical board scan");
         if (sendCynus("scan board\n")) {
-            if (boardSyncPurpose==BOARD_SYNC_STARTUP) { boardScanPending=false; startupFreshFenExpected=true; Serial.println("[STARTUP] scan started; waiting for Cynus scan FEN"); }
+            if (boardSyncPurpose==BOARD_SYNC_STARTUP) { boardScanPending=false; startupFreshFenExpected=true; startupFreshFenExpectedAt=millis(); Serial.println("[STARTUP] scan started; waiting for Cynus scan FEN"); }
             else { boardScanPending=true; boardScanGetFenAt=millis()+BOARD_SCAN_WAIT_MS; }
         } else { boardSyncRequestPending=true; boardSyncRequestAt=millis()+500; }
+    }
+    if (state==SYNC_BOARD && boardSyncPurpose==BOARD_SYNC_STARTUP && startupCorrectionMode &&
+        startupFreshFenExpected && !boardSyncRequestPending && startupFreshFenExpectedAt &&
+        (uint32_t)(millis()-startupFreshFenExpectedAt)>=STARTUP_FEN_TIMEOUT_MS) {
+        startupFreshFenExpected=false;
+        startupFreshFenExpectedAt=0;
+        Serial.println("[STARTUP] scan returned no FEN; Clock scan re-armed");
     }
     if (boardScanPending && cynusReady && (int32_t)(millis()-boardScanGetFenAt)>=0) {
         boardScanPending=false; Serial.println("[SYNC] recovery scan complete; requesting fresh FEN");
@@ -1239,3 +1355,4 @@ static void cynuslinkCoreLoop() {
 
 void setup() { cynuslinkCoreSetup(); }
 void loop() { cynuslinkCoreLoop(); processStartOrientation(); }
+

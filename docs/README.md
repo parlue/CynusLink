@@ -1,5 +1,8 @@
 # CynusLink Web Flasher
 
+The manifest installs the complete ESP32-S3 image set: bootloader,
+partition table, boot application selector and CynusLink firmware.
+
 Upload this complete `docs` directory to the root of the CynusLink GitHub repository.
 
 Then open:
