@@ -12,34 +12,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
-      - name: Patch exactly one auto-report block
+      - name: Patch exactly one sendStatus call
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('src/main.cpp')
-          s = p.read_text()
-          old = '''    if (clConnected && clNotify && boardSynced) {
-              uint32_t interval = autoReportIntervalMs();
-              if (interval && (lastAutoStatusAt==0 || (uint32_t)(millis()-lastAutoStatusAt)>=interval)) {
-                  lastAutoStatusAt=millis();
-                  sendStatus();
-              }
-          }
-          '''
-          new = '''    if (clConnected && clNotify && boardSynced) {
-              uint32_t interval = autoReportIntervalMs();
-              if (interval && (lastAutoStatusAt==0 || (uint32_t)(millis()-lastAutoStatusAt)>=interval)) {
-                  lastAutoStatusAt=millis();
-                  if (fenNow != lastFenSentToChessLink) sendStatus();
-              }
-          }
-          '''
-          count = s.count(old)
-          if count != 1:
-              raise SystemExit(f'refusing patch: target count={count}, expected 1')
-          p.write_text(s.replace(old, new, 1))
-          PY
+          python3 -c "from pathlib import Path; p=Path('src/main.cpp'); s=p.read_text(); old='            lastAutoStatusAt=millis();\n            sendStatus();'; new='            lastAutoStatusAt=millis();\n            if (fenNow != lastFenSentToChessLink) sendStatus();'; c=s.count(old); assert c==1, f'target count={c}, expected 1'; p.write_text(s.replace(old,new,1))"
           git diff --check
           git diff -- src/main.cpp
       - name: Commit isolated fix
