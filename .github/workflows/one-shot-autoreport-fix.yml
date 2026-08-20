@@ -26,7 +26,7 @@ jobs:
                   sendStatus();
               }
           }
-'''
+          '''
           new = '''    if (clConnected && clNotify && boardSynced) {
               uint32_t interval = autoReportIntervalMs();
               if (interval && (lastAutoStatusAt==0 || (uint32_t)(millis()-lastAutoStatusAt)>=interval)) {
@@ -34,7 +34,7 @@ jobs:
                   if (fenNow != lastFenSentToChessLink) sendStatus();
               }
           }
-'''
+          '''
           count = s.count(old)
           if count != 1:
               raise SystemExit(f'refusing patch: target count={count}, expected 1')
