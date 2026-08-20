@@ -51,3 +51,4 @@ jobs:
           git diff --cached --check
           git commit -m 'fix: report ChessLink board state only on change'
           git push origin HEAD:main
+# trigger
