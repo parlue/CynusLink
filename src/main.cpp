@@ -1171,7 +1171,7 @@ static void processSupervision() {
         uint32_t interval = autoReportIntervalMs();
         if (interval && (lastAutoStatusAt==0 || (uint32_t)(millis()-lastAutoStatusAt)>=interval)) {
             lastAutoStatusAt=millis();
-            sendStatus();
+            if (fenNow != lastFenSentToChessLink) sendStatus();
         }
     }
     if (millis()-lastLinkHealthCheckAt>=LINK_HEALTH_CHECK_MS) {
