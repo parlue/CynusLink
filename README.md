@@ -33,37 +33,14 @@ CynusLink uses the Cynus display to provide simple status information without af
 
 After ChessLink connects, `ready` is held until Cynus confirms external-engine readiness. Only then does the display change to `play`.
 
-### Playing as Black (Actual not available)
+### Playing as Black (in beta)
 
 CynusLink supports starting a game with the human player on the **black** side.
 
-Set up the complete initial position with the board rotated by 180 degrees and scan the board. CynusLink recognizes the flipped starting position and sends:
-
-``` text
-set flip board on
+Set up the complete initial position with the board rotated by 180 degrees and scan the board. 
+If the computer send the first move: CynusLink will flip the board 
+If the human send the first move: CynusLink will reflip te board.
 ```
-
-In this mode CynusLink knows that the software plays White. The gateway waits for the first move from the ChessLink software and does not wait for a human move first.
-
-The sequence is:
-
-1. The flipped initial position is detected.
-2. Cynus receives `set flip board on`.
-3. CynusLink waits until Cynus reports `get move`.
-4. The initial board position is reported to the ChessLink software once.
-5. If the software is configured to play White, it can immediately send the first move.
-6. Cynus executes the software move.
-7. After the robot position is confirmed, the game continues with the human player on Black.
-
-For the normal initial position CynusLink sends:
-
-``` text
-set flip board off
-```
-
-and waits for the human player to make the first White move.
-
-The flip command is set whenever a valid initial position is recognized, including after boot and when a new game is started.
 
 ### Initial Position Errors
 
