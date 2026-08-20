@@ -949,6 +949,17 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                                 continue;
                             }
 
+                            if (orientation == 1) {
+                                if (!sendCynus("set flip board on\n")) {
+                                    Serial.println("[STARTUP] flipped initial position detected, but flip board ON failed; startup remains gated");
+                                    startupFreshFenExpected=false;
+                                    startupCorrectionMode=true;
+                                    continue;
+                                }
+                                firstMoveFlipOn=true;
+                                Serial.println("[STARTUP] flipped initial position detected -> flip board ON sent; first-move gate remains active");
+                            }
+
                             boardSyncRequestPending=false;
                             boardScanPending=false;
                             startupFreshFenExpected=false;
