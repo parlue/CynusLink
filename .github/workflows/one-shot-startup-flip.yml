@@ -1,0 +1,49 @@
+name: one-shot-startup-flip
+on:
+  push:
+    paths:
+      - '.github/workflows/one-shot-startup-flip.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch startup flip initialization
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/main.cpp')
+          s = p.read_text()
+          old = '''                            if (orientation == 1) {
+                                if (!sendCynus("set flip board on\\n")) {
+                                    Serial.println("[STARTUP] flipped initial position detected, but flip board ON failed; startup remains gated");
+                                    startupFreshFenExpected=false;
+                                    startupCorrectionMode=true;
+                                    continue;
+                                }
+                                firstMoveFlipOn=true;
+                                Serial.println("[STARTUP] flipped initial position detected -> flip board ON sent; first-move gate remains active");
+                            }
+'''
+          new = '''                            const char* startupFlipCmd = orientation == 1 ? "set flip board on\\n" : "set flip board off\\n";
+                            if (!sendCynus(startupFlipCmd)) {
+                                Serial.printf("[STARTUP] set flip board %s BLE write failed; startup remains gated\\n", orientation == 1 ? "ON" : "OFF");
+                                startupFreshFenExpected=false;
+                                startupCorrectionMode=true;
+                                continue;
+                            }
+                            firstMoveFlipOn = orientation == 1;
+                            Serial.printf("[STARTUP] initial position -> flip board %s sent (no ACK expected); first-move gate remains active\\n", orientation == 1 ? "ON" : "OFF");
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected exactly one startup block, found {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.cpp
+          git commit -m "fix: initialize Cynus flip at startup"
+          git push
