@@ -19,12 +19,12 @@ ChessLink-compatible device.
 
 ## How to use
 
-It is importand to do all im the reight sequence.
-1. Start the Manya Cynus and take care that all peace are in startup position and the position will detect right bei the cam.
-2. Power on the Gateway and wait 30 sec. The gateway will connect the cynus and scan the board. You can follw it, the color of the clock button switch to red and green if the position is right. If not, the display shows errors in the position. Please correct this by pressing the clock buttun abain. If the position is really ready the gateway will searxh for a chesslink device.
-3. Power on the chesslink device/software The display shows BT SCAN - > Connect -> Play
-4. If the Display shows Play.. it is ready to work.
-   
+It is important to follow the startup sequence in the correct order.
+
+1. Start the Manya Cynus. Make sure all pieces are in the normal starting position and that the board position is detected correctly by the camera.
+2. Power on the CynusLink gateway and wait for it to connect to the Cynus and scan the board. The clock-button indication changes during the scan. If the starting position is not correct, the display shows the detected position errors. Correct the indicated squares and press the Cynus Scan/clock button again. When the starting position is correct, the display shows `POS OK` and then `BT Scan` while CynusLink waits for a ChessLink connection.
+3. Start or connect the ChessLink-compatible chess computer/software. The Cynus display proceeds from `BT Scan` to `Connect` and finally to `play` when the connection and external-engine handshake are ready.
+4. When the display shows `play`, CynusLink is ready to use.
 
 ## Options
 
@@ -36,20 +36,16 @@ CynusLink uses the Cynus display to provide simple status information without af
 
 | Display | Meaning |
 | --- | --- |
+| `POS OK` | Initial board position is correct |
 | `BT Scan` | Cynus connected, waiting for ChessLink |
 | `Connect` | ChessLink connected |
 | `play` | CynusLink is ready to play |
 
-After ChessLink connects, `ready` is held until Cynus confirms external-engine readiness. Only then does the display change to `play`.
+After ChessLink connects, CynusLink waits until Cynus confirms external-engine readiness. Only then does the display change to `play`.
 
 ### Playing as Black (in beta)
 
-CynusLink supports starting a game with the human player on the **black** side.
-
-Set up the complete initial position with the board rotated by 180 degrees and scan the board. 
-If the computer send the first move: CynusLink will flip the board 
-If the human send the first move: CynusLink will reflip te board.
-```
+CynusLink determines the playing orientation from who makes the first move. If the ChessLink computer makes the first move, CynusLink sets the Cynus board flip before forwarding that move. If the human makes the first move on the board, the normal orientation is used.
 
 ### Initial Position Errors
 
@@ -95,20 +91,24 @@ Moves received from the ChessLink application are shown on the Cynus display whi
 
 After the robot has completed the move, the display returns to `play`.
 
-### Sound Options
+### Board Options
 
-Sound can be configured directly from the chessboard.
+Several options can be configured directly from the chessboard.
 
-Set up the normal starting position, move only the **black King**, and press the Cynus **Scan** button.
+Set up the normal starting position, move only the **black King** to the indicated square, and press the Cynus **Scan** button. These special configuration positions are handled internally by CynusLink and are **not sent to the connected ChessLink software**.
 
 | Black King | Function | Display |
 | --- | --- | --- |
 | `e5` | Sound OFF (`sound 0`) | `snd off` |
 | `e6` | Sound ON (`sound 70`) | `snd on` |
+| `h5` | Board flip ON (`set flip board on`) | unchanged |
+| `h6` | Board flip OFF (`set flip board off`) | unchanged |
+| `d5` | Analysis flag ON | `Analyse` |
+| `d6` | Analysis flag OFF | `play` |
 
-After two seconds, the display automatically returns to `play`.
+The analysis flag is currently only stored internally. It does not yet change game or protocol behavior.
 
-These special configuration positions are handled internally by CynusLink and are **not sent to the connected ChessLink software**.
+For the sound options, the display automatically returns to `play` after a short delay.
 
 ## Installation
 
@@ -116,13 +116,12 @@ No development environment is required.
 
 ### Web Installer
 
-1.  Connect the ESP32-S3 to your computer via USB.
-2.  Open the **CynusLink Web Installer** in Google Chrome or Microsoft
-    Edge.
-3.  Click **Connect** and select the ESP32-S3.
-4.  Confirm the installation.
-5.  Wait until flashing is complete.
-6.  Disconnect and reconnect USB power.
+1. Connect the ESP32-S3 to your computer via USB.
+2. Open the **CynusLink Web Installer** in Google Chrome or Microsoft Edge.
+3. Click **Connect** and select the ESP32-S3.
+4. Confirm the installation.
+5. Wait until flashing is complete.
+6. Disconnect and reconnect USB power.
 
 **[Install CynusLink on ESP32-S3](https://parlue.github.io/CynusLink/)**
 
@@ -149,31 +148,29 @@ Chess Software
 
 The ESP32-S3 operates simultaneously as:
 
--   **BLE Peripheral** for the ChessLink connection
--   **BLE Central** for the Cynus connection
--   **Protocol gateway** between both devices
+- **BLE Peripheral** for the ChessLink connection
+- **BLE Central** for the Cynus connection
+- **Protocol gateway** between both devices
 
 ## Features
 
--   Wireless BLE-to-BLE gateway
--   ChessLink-compatible interface
--   Reads the physical Cynus board position
--   Transfers physical moves to the chess software
--   Sends engine moves to the Cynus robot
--   Supports normal and 180-degree-flipped initial positions
--   Supports playing as White or Black
--   Shows startup position differences on the Cynus display
--   New games can be started by setting up the initial position and
-    using the Cynus scanner
--   Standalone operation with only USB power
--   Screwless 3D-printable ESP32-S3 enclosure
+- Wireless BLE-to-BLE gateway
+- ChessLink-compatible interface
+- Reads the physical Cynus board position
+- Transfers physical moves to the chess software
+- Sends engine moves to the Cynus robot
+- Supports playing as White or Black
+- Shows startup position differences on the Cynus display
+- New games can be started by setting up the initial position and using the Cynus scanner
+- Standalone operation with only USB power
+- Screwless 3D-printable ESP32-S3 enclosure
 
 ## Hardware
 
--   Manya Cynus chess robot
--   ESP32-S3 DevKitC-1 compatible board
--   USB-C power supply
--   Optional 3D-printed enclosure
+- Manya Cynus chess robot
+- ESP32-S3 DevKitC-1 compatible board
+- USB-C power supply
+- Optional 3D-printed enclosure
 
 ## Repository
 
@@ -250,6 +247,5 @@ copyrighted material is distributed with this project.
 
 Please respect the copyrights, trademarks and other intellectual property
 rights of MILLENNIUM 2000 GmbH and all other respective rights holders.
-
 
 Use at your own risk.

@@ -65,11 +65,16 @@ enum EngineSide { ENGINE_SIDE_UNKNOWN, ENGINE_SIDE_WHITE, ENGINE_SIDE_BLACK };
 static EngineSide engineSide = ENGINE_SIDE_UNKNOWN;
 static bool firstMoveOrientationLocked = false;
 static bool firstMoveFlipOn = false;
+static bool analysisEnabled = false;
 
 static constexpr const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 static constexpr const char* FLIPPED_START_FEN = "RNBKQBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbkqbnr";
 static constexpr const char* SOUND_OFF_FEN = "rnbq1bnr/pppppppp/8/4k3/8/8/PPPPPPPP/RNBQKBNR";
 static constexpr const char* SOUND_ON_FEN = "rnbq1bnr/pppppppp/4k3/8/8/8/PPPPPPPP/RNBQKBNR";
+static constexpr const char* FLIP_ON_FEN = "rnbq1bnr/pppppppp/8/7k/8/8/PPPPPPPP/RNBQKBNR";
+static constexpr const char* FLIP_OFF_FEN = "rnbq1bnr/pppppppp/7k/8/8/8/PPPPPPPP/RNBQKBNR";
+static constexpr const char* ANALYSIS_ON_FEN = "rnbq1bnr/pppppppp/8/3k4/8/8/PPPPPPPP/RNBQKBNR";
+static constexpr const char* ANALYSIS_OFF_FEN = "rnbq1bnr/pppppppp/3k4/8/8/8/PPPPPPPP/RNBQKBNR";
 
 enum BoardSyncPurpose { BOARD_SYNC_NONE, BOARD_SYNC_STARTUP, BOARD_SYNC_RECOVERY };
 static BoardSyncPurpose boardSyncPurpose = BOARD_SYNC_NONE;
@@ -338,6 +343,35 @@ static void showStartupErrors() {
     cynusDisplay(msg.c_str());
     sendCynus("play audio error\n");
     Serial.printf("[STARTUP] position error display: %s (error audio)\n", msg.c_str());
+}
+
+static bool handlePieceConfigFen(String f) {
+    int sp = f.indexOf(' ');
+    if (sp >= 0) f = f.substring(0, sp);
+
+    bool flipOn = f == FLIP_ON_FEN;
+    bool flipOff = f == FLIP_OFF_FEN;
+    bool analysisOn = f == ANALYSIS_ON_FEN;
+    bool analysisOff = f == ANALYSIS_OFF_FEN;
+    if (!flipOn && !flipOff && !analysisOn && !analysisOff) return false;
+
+    publishNextFenToChessLink = false;
+    correctionFenCandidate = "";
+    boardSynced = fenNow.length() > 0;
+    cynusWaitingForMove = true;
+    displayPlayPending = false;
+
+    if (flipOn || flipOff) {
+        const char* command = flipOn ? "set flip board on\n" : "set flip board off\n";
+        if (!sendCynus(command)) return true;
+        Serial.printf("[CONFIG] manual flip %s selected with black king; config FEN suppressed from ChessLink\n", flipOn ? "ON" : "OFF");
+        return true;
+    }
+
+    analysisEnabled = analysisOn;
+    cynusDisplay(analysisEnabled ? "Analyse" : "play");
+    Serial.printf("[CONFIG] analysis %s selected with black king; config FEN suppressed from ChessLink\n", analysisEnabled ? "ON" : "OFF");
+    return true;
 }
 
 static bool handleSoundConfigFen(String f) {
@@ -887,6 +921,8 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                     boardSyncRequestPending=false;
                     Serial.println("[STARTUP] manual correction FEN received; queued fallback scan cancelled");
                 }
+                if (initialStartupComplete && state==RUNNING && clConnected &&
+                    (moveCycle==WAIT_HUMAN_MOVE || moveCycle==WAIT_FIRST_MOVE) && handlePieceConfigFen(f)) continue;
                 if (initialStartupComplete && state==RUNNING && clConnected && moveCycle==WAIT_HUMAN_MOVE && handleSoundConfigFen(f)) continue;
 
                 if (state==SYNC_BOARD && cynusReady && boardSyncPurpose==BOARD_SYNC_STARTUP && !startupFreshFenExpected && !startupCorrectionMode) {
