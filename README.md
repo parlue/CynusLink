@@ -17,6 +17,15 @@ move commands between the Cynus and ChessLink protocols.
 To the chess application, the ESP32-S3 behaves like a
 ChessLink-compatible device.
 
+## How to use
+
+It is importand to do all im the reight sequence.
+1. Start the Manya Cynus and take care that all peace are in startup position and the position will detect right bei the cam.
+2. Power on the Gateway and wait 30 sec. The gateway will connect the cynus and scan the board. You can follw it, the color of the clock button switch to red and green if the position is right. If not, the display shows errors in the position. Please correct this by pressing the clock buttun abain. If the position is really ready the gateway will searxh for a chesslink device.
+3. Power on the chesslink device/software The display shows BT SCAN - > Connect -> Play
+4. If the Display shows Play.. it is ready to work.
+   
+
 ## Options
 
 ## Display Options
