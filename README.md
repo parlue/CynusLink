@@ -22,7 +22,7 @@ ChessLink-compatible device.
 It is important to follow the startup sequence in the correct order.
 
 1. Start the Manya Cynus. Make sure all pieces are in the normal starting position and that the board position is detected correctly by the camera.
-2. Power on the CynusLink gateway and wait for it to connect to the Cynus and scan the board. The clock-button indication changes during the scan. If the starting position is not correct, the display shows the detected position errors. Correct the indicated squares and press the Cynus Scan/clock button again. When the starting position is correct, the display shows `POS OK` and then `BT Scan` while CynusLink waits for a ChessLink connection.
+2. Power on the CynusLink gateway and wait for it to connect to the Cynus and scan the board. The clock-button indication changes during the scan. If the starting position is not correct, the display shows the detected position errors. Correct the indicated squares. CynusLink scans the board again automatically every five seconds until the starting position is correct. The Cynus Scan/clock button can also be used to scan immediately. When the starting position is correct, the display shows `POS OK` and then `BT Scan` while CynusLink waits for a ChessLink connection.
 3. Start or connect the ChessLink-compatible chess computer/software. The Cynus display proceeds from `BT Scan` to `Connect` and finally to `play` when the connection and external-engine handshake are ready.
 4. When the display shows `play`, CynusLink is ready to use.
 
@@ -103,12 +103,40 @@ Set up the normal starting position, move only the **black King** to the indicat
 | `e6` | Sound ON (`sound 70`) | `snd on` |
 | `h5` | Board flip ON (`set flip board on`) | unchanged |
 | `h6` | Board flip OFF (`set flip board off`) | unchanged |
-| `d5` | Analysis flag ON | `Analyse` |
-| `d6` | Analysis flag OFF | `play` |
-
-The analysis flag is currently only stored internally. It does not yet change game or protocol behavior.
+| `d5` | Free Analysis ON | `Freemode` |
+| `d6` | Free Analysis OFF | `play` |
+| `c5` | Set Position | `Set Pos` |
+| `c6` | Cancel Set Position | `play` |
 
 For the sound options, the display automatically returns to `play` after a short delay.
+
+### Free Analysis
+
+Move the black King from its normal starting square to **D5** and scan the board to start Free Analysis. The display shows `Freemode`.
+
+In Free Analysis, the Cynus is used as an electronic sensor board. The robot does not move pieces. CynusLink scans the board every five seconds and sends the detected position to the connected chess computer so that the user can move pieces for both sides and analyse different positions.
+
+The side to move is selected when the analysis position is set up:
+
+- If both Kings are already on the board, White moves first.
+- If the white King is placed last, Black moves first.
+- If the black King is placed last, White moves first.
+
+To leave Free Analysis, set up the normal starting position with the black King on **D6** and scan the board. The display returns to `play`, normal play resumes, and the human can make the next move.
+
+### Set Position
+
+Move the black King from its normal starting square to **C5** and scan the board to start Set Position. The display shows `Set Pos`.
+
+Set up the desired position and use the Cynus Scan/clock button when it is ready. There is no automatic scan in this mode. The position is sent to the connected chess computer only after both Kings have been detected.
+
+The side to move is selected in the same way as in Free Analysis:
+
+- If both Kings are already on the board, White moves first.
+- If the white King is placed last, Black moves first.
+- If the black King is placed last, White moves first.
+
+After the position and side to move have been accepted, the display returns to `play` and a normal game continues from the new position. To cancel Set Position, set up the normal starting position with the black King on **C6** and scan the board.
 
 ## Installation
 
