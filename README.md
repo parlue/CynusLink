@@ -3,7 +3,7 @@
 **Bluetooth LE gateway for using the Manya Cynus chess robot with
 ChessLink-compatible software.**
 
-CynusLink uses an **ESP32-S3** as a wireless protocol bridge between the
+CynusLink uses an **ESP32-S3** or **ESP32-C3 SuperMini** as a wireless protocol bridge between the
 Manya Cynus and software that supports the Millennium ChessLink
 protocol.
 
@@ -14,7 +14,7 @@ The Manya Cynus uses its own Bluetooth LE protocol.
 CynusLink connects to the Cynus via BLE and translates board states and
 move commands between the Cynus and ChessLink protocols.
 
-To the chess application, the ESP32-S3 behaves like a
+To the chess application, the ESP32 behaves like a
 ChessLink-compatible device.
 
 ## How to use
@@ -144,20 +144,21 @@ No development environment is required.
 
 ### Web Installer
 
-1. Connect the ESP32-S3 to your computer via USB.
+1. Connect the ESP32-S3 or ESP32-C3 SuperMini to your computer via USB.
 2. Open the **CynusLink Web Installer** in Google Chrome or Microsoft Edge.
-3. Click **Connect** and select the ESP32-S3.
+3. Click **Connect** and select your ESP32.
 4. Confirm the installation.
 5. Wait until flashing is complete.
 6. Disconnect and reconnect USB power.
 
-**[Install CynusLink on ESP32-S3](https://parlue.github.io/CynusLink/)**
+**[Install CynusLink on ESP32-S3 or ESP32-C3 SuperMini](https://parlue.github.io/CynusLink/)**
 
 > The web installer requires a browser with Web Serial support, such as
 > Google Chrome or Microsoft Edge.
 
-The precompiled firmware is built for an **ESP32-S3 DevKitC-1 compatible
-board**.
+The web installer supports **ESP32-S3 DevKitC-1 compatible boards** and the
+**ESP32-C3 SuperMini**. It automatically selects the correct firmware for the
+connected ESP32.
 
 ## Architecture
 
@@ -166,7 +167,7 @@ Chess Software
      |
      | ChessLink BLE
      |
-  ESP32-S3
+    ESP32
   CynusLink
      |
      | Cynus BLE
@@ -174,7 +175,7 @@ Chess Software
  Manya Cynus
 ```
 
-The ESP32-S3 operates simultaneously as:
+The ESP32 operates simultaneously as:
 
 - **BLE Peripheral** for the ChessLink connection
 - **BLE Central** for the Cynus connection
@@ -196,9 +197,9 @@ The ESP32-S3 operates simultaneously as:
 ## Hardware
 
 - Manya Cynus chess robot
-- ESP32-S3 DevKitC-1 compatible board
+- ESP32-S3 DevKitC-1 compatible board or ESP32-C3 SuperMini
 - USB-C power supply
-- Optional 3D-printed enclosure
+- Optional 3D-printed enclosure for the ESP32-S3 version
 
 ## Repository
 
@@ -220,7 +221,7 @@ CynusLink/
 
 ### `src`
 
-Contains the ESP32-S3 source code.
+Contains the ESP32-S3 and ESP32-C3 source code.
 
 ### `Firmware`
 
@@ -232,16 +233,16 @@ Contains the STL files for the screwless 3D-printed ESP32-S3 enclosure.
 
 ### `docs`
 
-Contains the browser-based ESP32-S3 Web Installer used by GitHub Pages.
+Contains the browser-based ESP32-S3 and ESP32-C3 Web Installer used by GitHub Pages.
 
 ## Building from Source
 
 The firmware can also be built with PlatformIO.
 
-Target configuration:
+Target configurations:
 
 ``` text
-Board:     ESP32-S3 DevKitC-1
+Boards:    ESP32-S3 DevKitC-1 / ESP32-C3 SuperMini
 Framework: Arduino
 BLE:       NimBLE-Arduino
 ```
@@ -250,7 +251,7 @@ BLE:       NimBLE-Arduino
 
 **Work in progress.**
 
-Communication between the Cynus, ESP32-S3 and ChessLink-compatible
+Communication between the Cynus, ESP32 and ChessLink-compatible
 software is working (Tested: Bearchess, Picochess and King Element via Diabillo Interface). Physical moves can be transferred to the chess
 software and engine moves can be executed by the Cynus.
 
