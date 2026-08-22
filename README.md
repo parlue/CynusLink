@@ -116,6 +116,8 @@ Move the black King from its normal starting square to **D5** and scan the board
 
 In Free Analysis, the Cynus is used as an electronic sensor board. The robot does not move pieces. CynusLink scans the board every five seconds and sends the detected position to the connected chess computer so that the user can move pieces for both sides and analyse different positions.
 
+Free Analysis must also be supported by the connected chess software. Examples are **BearChess** on Windows and **PGN Master** on Android.
+
 The side to move is selected when the analysis position is set up:
 
 - If both Kings are already on the board, White moves first.
@@ -130,13 +132,9 @@ Move the black King from its normal starting square to **C5** and scan the board
 
 Set up the desired position and use the Cynus Scan/clock button when it is ready. There is no automatic scan in this mode. The position is sent to the connected chess computer only after both Kings have been detected.
 
-The side to move is selected in the same way as in Free Analysis:
+After the position has been transferred, select the side to move in the connected chess software.
 
-- If both Kings are already on the board, White moves first.
-- If the white King is placed last, Black moves first.
-- If the black King is placed last, White moves first.
-
-After the position and side to move have been accepted, the display returns to `play` and a normal game continues from the new position. To cancel Set Position, set up the normal starting position with the black King on **C6** and scan the board.
+After the position has been accepted and the side to move has been selected in the software, the display returns to `play` and a normal game continues from the new position. To cancel Set Position, set up the normal starting position with the black King on **C6** and scan the board.
 
 ## Installation
 
