@@ -95,7 +95,7 @@ After the robot has completed the move, the display returns to `play`.
 
 Several options can be configured directly from the chessboard.
 
-Set up the normal starting position, move only the **black King** to the indicated square, and press the Cynus **Scan** button. These special configuration positions are handled internally by CynusLink and are **not sent to the connected ChessLink software**.
+Set up the normal starting position, move only the **black King** to the indicated square, and press the Cynus **Scan** button. Configuration positions are handled internally by CynusLink. The D5/D6 Free Analysis positions are also sent to ChessLink so that compatible analysis software can observe the complete board-state sequence.
 
 | Black King | Function | Display |
 | --- | --- | --- |
@@ -114,15 +114,26 @@ For the sound options, the display automatically returns to `play` after a short
 
 Move the black King from its normal starting square to **D5** and scan the board to start Free Analysis. The display shows `Freemode`.
 
-In Free Analysis, the Cynus is used as an electronic sensor board. The robot does not move pieces. CynusLink scans the board every five seconds and sends the detected position to the connected chess computer so that the user can move pieces for both sides and analyse different positions.
+In Free Analysis, the Cynus is used as an electronic sensor board. The robot does not move pieces. CynusLink scans the board every five seconds. A changed scan is processed immediately; an unchanged position is not sent again.
+
+ChessLink reports the complete 64-square occupancy whenever the physical board changes. Because Cynus supplies only the completed FEN of a scan, CynusLink recreates the individual sensor events serially:
+
+- A moved piece is lifted and then placed on its destination.
+- A removed piece generates only a lift event.
+- A newly added piece generates only a placement event.
+- A replaced piece is lifted and the new piece is then placed.
+- Multiple changes are sent one after another, with at least 500 ms between events.
+
+A lift and its corresponding placement are sent directly one after another before the next piece is processed. This lets the connected software construct its own FEN from normal ChessLink board changes without requiring a legal move sequence.
 
 Free Analysis must also be supported by the connected chess software. Examples are **BearChess** on Windows and **PGN Master** on Android.
 
-The side to move is selected when the analysis position is set up:
+For a position with many changes, first build and scan it without the King that will determine the side to move. The missing King keeps the analysis engine paused. When the rest of the position is visible in the software, place that King and wait for the next automatic scan. It is then reported as the final individual placement:
 
-- If both Kings are already on the board, White moves first.
 - If the white King is placed last, Black moves first.
 - If the black King is placed last, White moves first.
+
+Castling rights are not supplied by the physical board and must be selected in the connected software.
 
 To leave Free Analysis, set up the normal starting position with the black King on **D6** and scan the board. The display returns to `play`, normal play resumes, and the human can make the next move.
 
