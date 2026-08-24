@@ -52,8 +52,16 @@ static bool clNotify = false;
 static uint16_t clConnHandle = BLE_HS_CONN_HANDLE_NONE;
 static String clBuf;
 static volatile bool clProcessPending = false;
+static bool clTrafficLogEnabled = true;
+static String lastLoggedLedFrame = "";
+static uint32_t lastLoggedLedAt = 0;
+static constexpr uint32_t REPEATED_LED_LOG_MS = 2000;
 static volatile bool clStatusPending = false;
 static uint32_t lastAutoStatusAt = 0;
+static bool clFinalStatusPending = false;
+static uint32_t clFinalStatusAt = 0;
+static char clSyntheticLiftBoard[65] = "................................................................";
+static constexpr uint32_t CL_SYNTHETIC_LIFT_MIN_MS = 500;
 
 static char board64[65] = "................................................................";
 static String fenNow = "";
@@ -67,14 +75,33 @@ static bool firstMoveOrientationLocked = false;
 static bool firstMoveFlipOn = false;
 static bool analysisEnabled = false;
 
+// EXPERIMENT START: Free Analysis and Set Position user modes.
+enum ExperimentalBoardMode { EXP_MODE_NONE, EXP_MODE_FREE_ANALYSIS, EXP_MODE_SET_POSITION };
+static ExperimentalBoardMode experimentalBoardMode = EXP_MODE_NONE;
+static uint32_t nextFreeAnalysisScanAt = 0;
+static bool setPositionManualScanExpected = false;
+static constexpr uint32_t FREE_ANALYSIS_SCAN_MS = 5000;
+static bool freeTransitionActive = false;
+static uint32_t freeTransitionNextAt = 0;
+static char freeTransitionBoard[65] = "................................................................";
+static char freeTransitionTarget[65] = "................................................................";
+static int freeTransitionPlacement = -1;
+static char freeTransitionPlacementPiece = '.';
+// EXPERIMENT END
+
 static constexpr const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 static constexpr const char* FLIPPED_START_FEN = "RNBKQBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbkqbnr";
+static constexpr const char* CONFIG_KING_LIFT_FEN = "rnbq1bnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 static constexpr const char* SOUND_OFF_FEN = "rnbq1bnr/pppppppp/8/4k3/8/8/PPPPPPPP/RNBQKBNR";
 static constexpr const char* SOUND_ON_FEN = "rnbq1bnr/pppppppp/4k3/8/8/8/PPPPPPPP/RNBQKBNR";
 static constexpr const char* FLIP_ON_FEN = "rnbq1bnr/pppppppp/8/7k/8/8/PPPPPPPP/RNBQKBNR";
 static constexpr const char* FLIP_OFF_FEN = "rnbq1bnr/pppppppp/7k/8/8/8/PPPPPPPP/RNBQKBNR";
 static constexpr const char* ANALYSIS_ON_FEN = "rnbq1bnr/pppppppp/8/3k4/8/8/PPPPPPPP/RNBQKBNR";
 static constexpr const char* ANALYSIS_OFF_FEN = "rnbq1bnr/pppppppp/3k4/8/8/8/PPPPPPPP/RNBQKBNR";
+// EXPERIMENT START: black-King commands for Set Position.
+static constexpr const char* SET_POSITION_ON_FEN = "rnbq1bnr/pppppppp/8/2k5/8/8/PPPPPPPP/RNBQKBNR";
+static constexpr const char* SET_POSITION_OFF_FEN = "rnbq1bnr/pppppppp/2k5/8/8/8/PPPPPPPP/RNBQKBNR";
+// EXPERIMENT END
 
 enum BoardSyncPurpose { BOARD_SYNC_NONE, BOARD_SYNC_STARTUP, BOARD_SYNC_RECOVERY };
 static BoardSyncPurpose boardSyncPurpose = BOARD_SYNC_NONE;
@@ -91,6 +118,9 @@ static bool boardScanPending = false;
 static bool startupFreshFenExpected = false;
 static uint32_t startupFreshFenExpectedAt = 0;
 static constexpr uint32_t STARTUP_FEN_TIMEOUT_MS = 2500;
+// EXPERIMENT START: automatically rescan an incorrect startup position.
+static constexpr uint32_t STARTUP_CORRECTION_RESCAN_MS = 5000;
+// EXPERIMENT END
 static bool startupCorrectionMode = false;
 static uint32_t boardScanGetFenAt = 0;
 static constexpr uint32_t BOARD_SCAN_WAIT_MS = 1000;
@@ -145,9 +175,13 @@ static void startChessLinkAdvertising();
 static void stopChessLinkAdvertising();
 static void sendCL(const String& payload);
 static void sendStatus();
+static void queueSyntheticBoardTransition(const String& oldFen, const String& newFen);
+static void queueFreeAnalysisTransition(const String& oldFen, const String& newFen);
+static void processFreeAnalysisTransition();
 static void processCL();
 static void handleCL(const String& frame);
 static void processPendingLedMove();
+static void clearPendingLedMove(const char* reason);
 static void setState(GatewayState s);
 static void requestBoardSync(BoardSyncPurpose purpose, uint32_t delayMs = 0);
 static void recoverChessLinkLoss(const char* source);
@@ -349,6 +383,166 @@ static void showStartupErrors() {
     Serial.printf("[STARTUP] position error display: %s (error audio)\n", msg.c_str());
 }
 
+// EXPERIMENT START: isolated helpers for Free Analysis and Set Position.
+static bool hasBothKings(const String& f) {
+    char position[65];
+    if (!fenPlacementTo64(f, position)) return false;
+    int whiteKings = 0, blackKings = 0;
+    for (int i = 0; i < 64; ++i) {
+        if (position[i] == 'K') ++whiteKings;
+        else if (position[i] == 'k') ++blackKings;
+    }
+    return whiteKings == 1 && blackKings == 1;
+}
+
+static void enterFreeAnalysis(const String& commandFen) {
+    experimentalBoardMode = EXP_MODE_FREE_ANALYSIS;
+    analysisEnabled = true;
+    setPositionManualScanExpected = false;
+    publishNextFenToChessLink = false;
+    correctionFenCandidate = "";
+    clearPendingLedMove(nullptr);
+    clFinalStatusPending = false;
+    freeTransitionActive = false;
+    freeTransitionPlacement = -1;
+    displayPlayPending = false;
+
+    // D5 must reach the chess computer: it activates its own Free Analysis mode.
+    if (fen2board(commandFen)) {
+        fenNow = commandFen;
+        bufferedFen = commandFen;
+        boardSynced = true;
+        memcpy(freeTransitionBoard, board64, sizeof(freeTransitionBoard));
+        memcpy(freeTransitionTarget, board64, sizeof(freeTransitionTarget));
+        clStatusPending = true;
+    }
+    nextFreeAnalysisScanAt = millis() + FREE_ANALYSIS_SCAN_MS;
+    cynusDisplay("Freemode");
+    Serial.println("[FREE] enabled; D5 command queued for ChessLink, automatic scan every 5 seconds");
+}
+
+static void leaveFreeAnalysis(const String& commandFen) {
+    freeTransitionActive = false;
+    freeTransitionPlacement = -1;
+    // D6 must reach the chess computer: it leaves its own Free Analysis mode.
+    if (fen2board(commandFen)) {
+        fenNow = commandFen;
+        bufferedFen = commandFen;
+        boardSynced = true;
+        sendStatus();
+    }
+    experimentalBoardMode = EXP_MODE_NONE;
+    analysisEnabled = false;
+    nextFreeAnalysisScanAt = 0;
+    setPositionManualScanExpected = false;
+    publishNextFenToChessLink = false;
+    correctionFenCandidate = "";
+    firstMoveOrientationLocked = true;
+    firstMoveFlipOn = false;
+    engineSide = ENGINE_SIDE_BLACK;
+    fenNow = START_FEN;
+    bufferedFen = START_FEN;
+    boardSynced = fen2board(START_FEN);
+    lastFenSentToChessLink = "";
+    cynusWaitingForMove = true;
+    setMoveCycle(WAIT_HUMAN_MOVE);
+    displayPlayPending = false;
+    cynusDisplay("play");
+    Serial.println("[FREE] disabled by D6; normal play restored with human/White to move");
+}
+
+static void enterSetPosition() {
+    experimentalBoardMode = EXP_MODE_SET_POSITION;
+    analysisEnabled = false;
+    nextFreeAnalysisScanAt = 0;
+    setPositionManualScanExpected = false;
+    publishNextFenToChessLink = false;
+    correctionFenCandidate = "";
+    clearPendingLedMove(nullptr);
+    displayPlayPending = false;
+    cynusDisplay("Set Pos");
+    Serial.println("[SET POS] enabled; waiting for a manual Clock scan with both kings");
+}
+
+static void leaveSetPosition(bool accepted, const String& acceptedFen = "") {
+    experimentalBoardMode = EXP_MODE_NONE;
+    setPositionManualScanExpected = false;
+    publishNextFenToChessLink = false;
+    correctionFenCandidate = "";
+    firstMoveOrientationLocked = false;
+    firstMoveFlipOn = false;
+    engineSide = ENGINE_SIDE_UNKNOWN;
+    cynusWaitingForMove = true;
+    setMoveCycle(WAIT_FIRST_MOVE);
+    displayPlayPending = false;
+
+    if (accepted && fen2board(acceptedFen)) {
+        fenNow = acceptedFen;
+        bufferedFen = acceptedFen;
+        boardSynced = true;
+        clStatusPending = true;
+        Serial.println("[SET POS] complete position queued for ChessLink; waiting for first mover");
+    } else {
+        fenNow = START_FEN;
+        bufferedFen = START_FEN;
+        boardSynced = fen2board(START_FEN);
+        Serial.println("[SET POS] cancelled; normal starting position restored internally");
+    }
+    cynusDisplay("play");
+}
+
+static bool handleExperimentalModeFen(String f) {
+    int sp = f.indexOf(' ');
+    if (sp >= 0) f = f.substring(0, sp);
+
+    if (experimentalBoardMode == EXP_MODE_FREE_ANALYSIS) {
+        if (f == ANALYSIS_OFF_FEN) {
+            leaveFreeAnalysis(f);
+            return true;
+        }
+        char scannedBoard[65];
+        if (!fenPlacementTo64(f, scannedBoard)) return true;
+        if (f == fenNow) {
+            displayPlayPending = false;
+            cynusDisplay("Freemode");
+            Serial.println("[FREE] unchanged scanned position ignored");
+            return true;
+        }
+
+        String previousFen = fenNow;
+        if (!fen2board(f)) return true;
+        fenNow = f;
+        bufferedFen = f;
+        boardSynced = true;
+        if (previousFen.length()) queueFreeAnalysisTransition(previousFen, f);
+        displayPlayPending = false;
+        cynusDisplay("Freemode");
+        Serial.println("[FREE] changed scanned position transition queued immediately without move validation");
+        return true;
+    }
+
+    if (experimentalBoardMode == EXP_MODE_SET_POSITION) {
+        if (!setPositionManualScanExpected) {
+            Serial.println("[SET POS] camera FEN ignored; press Clock to accept a position");
+            return true;
+        }
+        setPositionManualScanExpected = false;
+        if (f == SET_POSITION_OFF_FEN) {
+            leaveSetPosition(false);
+            return true;
+        }
+        if (!hasBothKings(f)) {
+            cynusDisplay("Set Pos");
+            Serial.println("[SET POS] manual scan ignored; both kings are required");
+            return true;
+        }
+        leaveSetPosition(true, f);
+        return true;
+    }
+    return false;
+}
+// EXPERIMENT END
+
 static bool handlePieceConfigFen(String f) {
     int sp = f.indexOf(' ');
     if (sp >= 0) f = f.substring(0, sp);
@@ -357,7 +551,9 @@ static bool handlePieceConfigFen(String f) {
     bool flipOff = f == FLIP_OFF_FEN;
     bool analysisOn = f == ANALYSIS_ON_FEN;
     bool analysisOff = f == ANALYSIS_OFF_FEN;
-    if (!flipOn && !flipOff && !analysisOn && !analysisOff) return false;
+    bool setPositionOn = f == SET_POSITION_ON_FEN;
+    bool setPositionOff = f == SET_POSITION_OFF_FEN;
+    if (!flipOn && !flipOff && !analysisOn && !analysisOff && !setPositionOn && !setPositionOff) return false;
 
     publishNextFenToChessLink = false;
     correctionFenCandidate = "";
@@ -374,9 +570,12 @@ static bool handlePieceConfigFen(String f) {
         return true;
     }
 
-    analysisEnabled = analysisOn;
-    cynusDisplay(analysisEnabled ? "Analyse" : "play");
-    Serial.printf("[CONFIG] analysis %s selected with black king; config FEN suppressed from ChessLink\n", analysisEnabled ? "ON" : "OFF");
+    // EXPERIMENT START: special user modes selected with the black King.
+    if (analysisOn) enterFreeAnalysis(f);
+    else if (analysisOff) leaveFreeAnalysis(f);
+    else if (setPositionOn) enterSetPosition();
+    else if (setPositionOff) leaveSetPosition(false);
+    // EXPERIMENT END
     return true;
 }
 
@@ -409,10 +608,12 @@ static void sendCL(const String& payload) {
     std::vector<uint8_t> bytes;
     bytes.reserve(full.length());
     for (size_t i = 0; i < full.length(); ++i) bytes.push_back((uint8_t)full[i]);
-    Serial.printf("[CHESS TX] %s\n", full.c_str());
-    Serial.print("[CHESS TX HEX]");
-    for (uint8_t b : bytes) Serial.printf(" %02X", b);
-    Serial.println();
+    if (clTrafficLogEnabled) {
+        Serial.printf("[CHESS TX] %s\n", full.c_str());
+        Serial.print("[CHESS TX HEX]");
+        for (uint8_t b : bytes) Serial.printf(" %02X", b);
+        Serial.println();
+    }
     uint16_t mtu = 23;
     if (clServer && clConnHandle != BLE_HS_CONN_HANDLE_NONE) {
         uint16_t peerMtu = clServer->getPeerMTU(clConnHandle);
@@ -435,9 +636,152 @@ static void sendCL(const String& payload) {
 static void sendStatus() {
     if (!boardSynced) return;
     String p = "s";
-    for (int i = 0; i < 64; ++i) p += board64[i];
+    const char* reportedBoard = freeTransitionActive ? freeTransitionBoard
+                                : (clFinalStatusPending ? clSyntheticLiftBoard : board64);
+    for (int i = 0; i < 64; ++i) p += reportedBoard[i];
     sendCL(p);
+    if (!clFinalStatusPending && !freeTransitionActive) lastFenSentToChessLink = fenNow;
+}
+
+static void sendBoard64Status(const char position[65]) {
+    String p = "s";
+    for (int i = 0; i < 64; ++i) p += position[i];
+    sendCL(p);
+}
+
+static uint32_t syntheticStageHoldMs() {
+    uint32_t scanMs = ((uint32_t)ee[1] * 2048UL + 999UL) / 1000UL;
+    uint8_t mode = ee[2] & 7;
+    uint8_t debounceScans = mode >= 4 ? mode - 2 : 1;
+    uint32_t protocolHoldMs = scanMs * debounceScans + 80;
+    return protocolHoldMs > CL_SYNTHETIC_LIFT_MIN_MS
+             ? protocolHoldMs : CL_SYNTHETIC_LIFT_MIN_MS;
+}
+
+static void queueFreeAnalysisTransition(const String& oldFen, const String& newFen) {
+    char oldB[65], newB[65];
+    if (!fenPlacementTo64(oldFen, oldB) || !fenPlacementTo64(newFen, newB)) return;
+
+    if (!freeTransitionActive) memcpy(freeTransitionBoard, oldB, sizeof(freeTransitionBoard));
+    memcpy(freeTransitionTarget, newB, sizeof(freeTransitionTarget));
+    freeTransitionActive = true;
+    freeTransitionNextAt = millis();
+    Serial.println("[FREE] serial piece transition started/updated");
+}
+
+static void processFreeAnalysisTransition() {
+    if (!freeTransitionActive || experimentalBoardMode != EXP_MODE_FREE_ANALYSIS) return;
+    if ((int32_t)(millis() - freeTransitionNextAt) < 0) return;
+    if (!clConnected || !clNotify) {
+        freeTransitionActive = false;
+        freeTransitionPlacement = -1;
+        return;
+    }
+
+    // Complete the placement belonging to the preceding lift before another
+    // piece is touched. This is the event order produced by a real board.
+    if (freeTransitionPlacement >= 0) {
+        int destination = freeTransitionPlacement;
+        char piece = freeTransitionPlacementPiece;
+        freeTransitionPlacement = -1;
+        freeTransitionPlacementPiece = '.';
+        if (freeTransitionTarget[destination] == piece) {
+            freeTransitionBoard[destination] = piece;
+            sendBoard64Status(freeTransitionBoard);
+            freeTransitionNextAt = millis() + syntheticStageHoldMs();
+            Serial.printf("[FREE] serial placement %c on %s\n",
+                          piece, startupSquare(destination).c_str());
+            return;
+        }
+    }
+
+    // Lift one changed piece. If the target contains the same piece elsewhere,
+    // queue that placement immediately as the next event. A replacement on
+    // the same square (for example a corrected piece identity) is paired too.
+    for (int i = 0; i < 64; ++i) {
+        if (freeTransitionBoard[i] != '.' && freeTransitionBoard[i] != freeTransitionTarget[i]) {
+            char lifted = freeTransitionBoard[i];
+            int destination = -1;
+            char placementPiece = '.';
+
+            if (freeTransitionTarget[i] != '.') {
+                destination = i;
+                placementPiece = freeTransitionTarget[i];
+            } else {
+                int bestDistance = 99;
+                for (int j = 0; j < 64; ++j) {
+                    if (freeTransitionTarget[j] != lifted || freeTransitionBoard[j] != '.') continue;
+                    int distance = abs((i % 8) - (j % 8)) + abs((i / 8) - (j / 8));
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        destination = j;
+                        placementPiece = lifted;
+                    }
+                }
+            }
+
+            freeTransitionBoard[i] = '.';
+            freeTransitionPlacement = destination;
+            freeTransitionPlacementPiece = placementPiece;
+            sendBoard64Status(freeTransitionBoard);
+            freeTransitionNextAt = millis() + syntheticStageHoldMs();
+            Serial.printf("[FREE] serial lift %c from %s\n", lifted, startupSquare(i).c_str());
+            return;
+        }
+    }
+
+    // Figures that have no matching source are genuine additions.
+    for (int i = 0; i < 64; ++i) {
+        if (freeTransitionBoard[i] != freeTransitionTarget[i] && freeTransitionTarget[i] != '.') {
+            freeTransitionBoard[i] = freeTransitionTarget[i];
+            sendBoard64Status(freeTransitionBoard);
+            freeTransitionNextAt = millis() + syntheticStageHoldMs();
+            Serial.printf("[FREE] serial placement %c on %s\n",
+                          freeTransitionBoard[i], startupSquare(i).c_str());
+            return;
+        }
+    }
+
+    freeTransitionActive = false;
+    freeTransitionPlacement = -1;
     lastFenSentToChessLink = fenNow;
+    Serial.println("[FREE] serial position transition complete");
+}
+
+// Cynus reports only the completed position.  A physical ChessLink reports
+// the lifted piece first and the completed position afterwards.  Recreate
+// that sensor sequence so host applications can commit the move.
+static void queueSyntheticBoardTransition(const String& oldFen, const String& newFen) {
+    char oldB[65], newB[65];
+    if (!fenPlacementTo64(oldFen, oldB) || !fenPlacementTo64(newFen, newB)) {
+        clStatusPending = true;
+        return;
+    }
+
+    int source = -1;
+    int sourceCount = 0;
+    for (int i = 0; i < 64; ++i) {
+        if (oldB[i] != '.' && newB[i] == '.') {
+            source = i;
+            ++sourceCount;
+        }
+    }
+
+    if (sourceCount == 1 && clConnected && clNotify) {
+        oldB[source] = '.';
+        memcpy(clSyntheticLiftBoard, oldB, sizeof(clSyntheticLiftBoard));
+        sendBoard64Status(oldB);
+        lastAutoStatusAt = millis();
+        clFinalStatusPending = true;
+        uint32_t holdMs = syntheticStageHoldMs();
+        clFinalStatusAt = millis() + holdMs;
+        Serial.printf("[CHESS] synthetic lift status sent for %s; final position queued in %lu ms\n",
+                      startupSquare(source).c_str(), (unsigned long)holdMs);
+    } else {
+        // Castling and unusual multi-piece setup changes cannot be represented
+        // by one unambiguous lift.  Preserve the complete status as fallback.
+        clStatusPending = true;
+    }
 }
 
 static uint8_t autoReportMode() { return ee[2] & 7; }
@@ -476,6 +820,9 @@ class ServerCB : public NimBLEServerCallbacks {
         clNotify = false;
         clConnHandle = BLE_HS_CONN_HANDLE_NONE;
         lastAutoStatusAt = 0;
+        clFinalStatusPending = false;
+        freeTransitionActive = false;
+        freeTransitionPlacement = -1;
         chessDisconnectEventPending = true;
     }
 };
@@ -885,6 +1232,14 @@ static void handleCL(const String& f) {
             break;
         }
         case 'L': {
+            // EXPERIMENT START: analysis suggestions must never move the robot in Freemode.
+            if (experimentalBoardMode == EXP_MODE_FREE_ANALYSIS) {
+                clearPendingLedMove("Free Analysis ignores engine moves");
+                sendCL("l");
+                if (clTrafficLogEnabled) Serial.println("[FREE] ChessLink LED/move command acknowledged without robot movement");
+                break;
+            }
+            // EXPERIMENT END
             if (state != RUNNING || (moveCycle != WAIT_ENGINE_MOVE && moveCycle != WAIT_FIRST_MOVE)) { clearPendingLedMove("L outside engine wait"); sendCL("l"); break; }
             uint8_t slot; if (!hb(f[1], f[2], slot)) break;
             bool ok = true; for (int i=0;i<81;++i) if (!hb(f[3+i*2],f[4+i*2],led[i])) {ok=false;break;}
@@ -898,7 +1253,7 @@ static void handleCL(const String& f) {
             String timeslotUci; int timeslotPly = -1;
             bool timeslotOk = extractTimeslotDiagnosticMove(timeslotUci, timeslotPly);
             String uci; bool legacyOk = extractMoveFromLCommand(uci);
-            if (timeslotOk || legacyOk) {
+            if (clTrafficLogEnabled && (timeslotOk || legacyOk)) {
                 Serial.printf("[CHESS LED DIAG] legacy=%s timeslot=%s ply=%d\n",
                               legacyOk ? uci.c_str() : "-",
                               timeslotOk ? timeslotUci.c_str() : "-",
@@ -920,8 +1275,20 @@ static void processCL() {
         if (n < 0) { clBuf.remove(0,1); continue; }
         if ((int)clBuf.length() < n) return;
         String f=clBuf.substring(0,n); clBuf.remove(0,n);
-        Serial.printf("[CHESS RX] %s\n", f.c_str());
+        clTrafficLogEnabled = true;
+        if (f[0] == 'L') {
+            String frameKey = f.substring(0, f.length() - 2);
+            if (frameKey == lastLoggedLedFrame &&
+                (uint32_t)(millis() - lastLoggedLedAt) < REPEATED_LED_LOG_MS) {
+                clTrafficLogEnabled = false;
+            } else {
+                lastLoggedLedFrame = frameKey;
+                lastLoggedLedAt = millis();
+            }
+        }
+        if (clTrafficLogEnabled) Serial.printf("[CHESS RX] %s\n", f.c_str());
         handleCL(f);
+        clTrafficLogEnabled = true;
     }
 }
 
@@ -939,6 +1306,8 @@ static void createChessLinkServer() {
 
 static void startChessLinkAdvertising() {
     if (!clServerStarted || !cynusReady || !boardSynced || state != WAIT_CHESSLINK) return;
+    NimBLEAdvertising* advertising=NimBLEDevice::getAdvertising();
+    if (advertising && advertising->isAdvertising()) { chessAdvertisingAllowed=true; return; }
     chessAdvertisingAllowed=true;
     if (NimBLEDevice::startAdvertising()) Serial.println("[CHESS] advertising as MILLENNIUM CHESS"); else chessAdvertisingAllowed=false;
 }
@@ -957,7 +1326,25 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                 continue;
             }
 
+            // EXPERIMENT START: Clock is the only scan trigger accepted by Set Position.
+            if (line.startsWith("promotions:") && experimentalBoardMode == EXP_MODE_SET_POSITION) {
+                setPositionManualScanExpected = true;
+                Serial.println("[SET POS] manual Clock scan detected; next FEN may be accepted");
+                continue;
+            }
+            // EXPERIMENT END
+
             if (line.equalsIgnoreCase("get move")) {
+                // EXPERIMENT START: special modes do not use normal move/robot logic.
+                if (experimentalBoardMode == EXP_MODE_FREE_ANALYSIS) {
+                    Serial.println("[FREE] get move ignored; periodic board scans publish raw positions");
+                    continue;
+                }
+                if (experimentalBoardMode == EXP_MODE_SET_POSITION) {
+                    Serial.println("[SET POS] get move ignored; press Clock to accept the setup");
+                    continue;
+                }
+                // EXPERIMENT END
                 if (!(cynusReady && clConnected)) {
                     if (cynusReady && state==WAIT_CHESSLINK) {
                         getMovePendingUntilChessLink=true;
@@ -1004,13 +1391,17 @@ static void cynusBytes(const uint8_t* data, size_t len) {
 
             if (line.startsWith("fen:")) {
                 String f=line.substring(4); f.trim();
+                // EXPERIMENT START: bypass normal chess logic while a special mode is active.
+                if (handleExperimentalModeFen(f)) continue;
+                // EXPERIMENT END
                 if (state==SYNC_BOARD && cynusReady && boardSyncPurpose==BOARD_SYNC_STARTUP && startupCorrectionMode && boardSyncRequestPending) {
                     boardSyncRequestPending=false;
                     Serial.println("[STARTUP] manual correction FEN received; queued fallback scan cancelled");
                 }
-                if (initialStartupComplete && state==RUNNING && clConnected &&
-                    (moveCycle==WAIT_HUMAN_MOVE || moveCycle==WAIT_FIRST_MOVE) && handlePieceConfigFen(f)) continue;
-                if (initialStartupComplete && state==RUNNING && clConnected && moveCycle==WAIT_HUMAN_MOVE && handleSoundConfigFen(f)) continue;
+                // Option FENs already contain the complete starting position and
+                // are therefore safe to recognize independently of the move cycle.
+                if (initialStartupComplete && state==RUNNING && clConnected && handlePieceConfigFen(f)) continue;
+                if (initialStartupComplete && state==RUNNING && clConnected && handleSoundConfigFen(f)) continue;
 
                 if (state==SYNC_BOARD && cynusReady && boardSyncPurpose==BOARD_SYNC_STARTUP && !startupFreshFenExpected && !startupCorrectionMode) {
                     Serial.printf("[STARTUP] ignoring pre-scan FEN: %s\n", f.c_str());
@@ -1031,8 +1422,13 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                             if (orientation<0) {
                                 startupFreshFenExpected=false;
                                 startupCorrectionMode=true;
+                                // EXPERIMENT START: retry the startup board scan every five seconds.
+                                // A manual Clock scan can still replace this pending automatic retry.
+                                boardSyncRequestPending=true;
+                                boardSyncRequestAt=millis()+STARTUP_CORRECTION_RESCAN_MS;
+                                // EXPERIMENT END
                                 Serial.printf("[STARTUP] board not ready: %s\n",bufferedFen.c_str());
-                                Serial.println("[STARTUP] waiting for initial position; correct board and press Cynus scan");
+                                Serial.println("[STARTUP] waiting for initial position; automatic rescan in 5 seconds (Clock scan also available)");
                                 continue;
                             }
 
@@ -1091,6 +1487,15 @@ static void cynusBytes(const uint8_t* data, size_t len) {
 
                     if (state==RUNNING && clConnected && publishNextFenToChessLink) {
                         String previousAcceptedFen=fenNow;
+                        String placement=bufferedFen;
+                        int placementSpace=placement.indexOf(' ');
+                        if (placementSpace>=0) placement=placement.substring(0,placementSpace);
+                        if (placement==CONFIG_KING_LIFT_FEN) {
+                            correctionFenCandidate="";
+                            fen2board(previousAcceptedFen);
+                            Serial.println("[CONFIG] black King lifted; waiting for option square without audio error");
+                            continue;
+                        }
                         String scanError;
                         String humanDisplayMove=inferMoveDisplayText(previousAcceptedFen,bufferedFen,&scanError);
                         if (!humanDisplayMove.length()) {
@@ -1114,7 +1519,7 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                         correctionFenCandidate="";
                         lastGameErrorDisplay="";
                         if (humanDisplayMove.length()) { cynusDisplay(humanDisplayMove.c_str()); schedulePlayDisplay(1400); }
-                        if (autoReport()) clStatusPending=true;
+                        if (autoReport()) queueSyntheticBoardTransition(previousAcceptedFen, bufferedFen);
                         setMoveCycle(WAIT_ENGINE_MOVE);
                         continue;
                     }
@@ -1234,6 +1639,18 @@ static void recoverChessLinkLoss(const char*) {
     clearPendingLedMove(nullptr);
     stopChessLinkAdvertising(); clConnected=false; clNotify=false; clConnHandle=BLE_HS_CONN_HANDLE_NONE; clBuf=""; cynusWaitingForMove=false; publishNextFenToChessLink=false; setMoveCycle(firstMoveOrientationLocked ? WAIT_HUMAN_MOVE : WAIT_FIRST_MOVE); lastAutoStatusAt=0;
     if (!cynusReady) { boardSynced=false; setState(SEARCH_CYNUS); return; }
+    // Special modes consume every incoming FEN themselves, so a recovery scan
+    // would never reach the normal SYNC_BOARD completion path.  Keep the last
+    // raw position and immediately make the ChessLink interface discoverable.
+    if (experimentalBoardMode != EXP_MODE_NONE && fenNow.length() && fen2board(fenNow)) {
+        boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; boardSynced=true;
+        startStatusPending=true;
+        setState(WAIT_CHESSLINK);
+        cynusDisplay("BT Scan");
+        startChessLinkAdvertising();
+        Serial.println("[CHESS] special mode preserved; advertising restarted after disconnect");
+        return;
+    }
     requestBoardSync(initialStartupComplete?BOARD_SYNC_RECOVERY:BOARD_SYNC_STARTUP,150);
 }
 
@@ -1242,6 +1659,9 @@ static void recoverCynusLoss(const char*) {
     cynusReady=false; cynusChr=nullptr; cynusDev=nullptr; boardSynced=false; fenNow=""; bufferedFen=""; lastFenSentToChessLink=""; correctionFenCandidate="";
     displayPlayPending=false; if (!firstMoveOrientationLocked) engineSide=ENGINE_SIDE_UNKNOWN; boardSyncPurpose=BOARD_SYNC_NONE; boardSyncRequestPending=false; boardScanPending=false; cynusWaitingForMove=false;
     startupFreshFenExpected=false; startupCorrectionMode=false; publishNextFenToChessLink=false; getMovePendingUntilChessLink=false; cynusEngineOffCommandSent=false; cynusExternalModeConfirmed=false; cynusEngineOffSecondSendPending=false; chessAdvertisingPendingAfterEngineOff=false; btScanDisplayPending=false; lastAutoStatusAt=0;
+    // EXPERIMENT START: never resume a half-finished special mode after BLE recovery.
+    experimentalBoardMode=EXP_MODE_NONE; analysisEnabled=false; nextFreeAnalysisScanAt=0; setPositionManualScanExpected=false;
+    // EXPERIMENT END
     stopChessLinkAdvertising(); clConnected=false; clNotify=false; clConnHandle=BLE_HS_CONN_HANDLE_NONE; clBuf=""; setState(SEARCH_CYNUS); nextCynusScanAt=millis()+500;
 }
 
@@ -1293,7 +1713,7 @@ static void processSupervision() {
         boardScanPending=false; Serial.println("[SYNC] recovery scan complete; requesting fresh FEN");
         if (!sendCynus("get fen\n")) { boardSyncRequestPending=true; boardSyncRequestAt=millis()+500; }
     }
-    if (clConnected && clNotify && boardSynced) {
+    if (clConnected && clNotify && boardSynced && !clFinalStatusPending && !freeTransitionActive) {
         uint32_t interval = autoReportIntervalMs();
         if (interval && (lastAutoStatusAt==0 || (uint32_t)(millis()-lastAutoStatusAt)>=interval)) {
             lastAutoStatusAt=millis();
@@ -1304,13 +1724,42 @@ static void processSupervision() {
         lastLinkHealthCheckAt=millis();
         if (cynusReady && cynusClient && !cynusClient->isConnected()) { recoverCynusLoss("health-check"); return; }
         if (clConnected && clServer && clServer->getConnectedCount()==0) { recoverChessLinkLoss("health-check"); return; }
+        if (!clConnected && cynusReady && boardSynced && state==WAIT_CHESSLINK) {
+            NimBLEAdvertising* advertising=NimBLEDevice::getAdvertising();
+            if (!advertising || !advertising->isAdvertising()) {
+                Serial.println("[CHESS] advertising inactive; watchdog restarting it");
+                startChessLinkAdvertising();
+            }
+        }
     }
     if (!cynusReady && !cynusConnectPending && state==SEARCH_CYNUS && nextCynusScanAt && (int32_t)(millis()-nextCynusScanAt)>=0) { nextCynusScanAt=0; startCynusScan(); }
 }
 
+// EXPERIMENT START: timed raw-board scanning for Free Analysis only.
+static void processExperimentalBoardModes() {
+    if (experimentalBoardMode != EXP_MODE_FREE_ANALYSIS || !cynusReady || !clConnected || state != RUNNING) return;
+    if (!nextFreeAnalysisScanAt) nextFreeAnalysisScanAt = millis() + FREE_ANALYSIS_SCAN_MS;
+    if ((int32_t)(millis() - nextFreeAnalysisScanAt) < 0) return;
+    if (sendCynus("scan board\n")) {
+        nextFreeAnalysisScanAt = millis() + FREE_ANALYSIS_SCAN_MS;
+        Serial.println("[FREE] automatic board scan started");
+    } else {
+        nextFreeAnalysisScanAt = millis() + 500;
+        Serial.println("[FREE] automatic board scan failed; retrying shortly");
+    }
+}
+// EXPERIMENT END
+
 static void showGameRescanErrors() {
     if (!initialStartupComplete || state!=RUNNING || moveCycle!=WAIT_ENGINE_MOVE) { lastGameErrorDisplay=""; return; }
     if (!correctionFenCandidate.length() || !lastFenSentToChessLink.length()) return;
+    String placement=correctionFenCandidate;
+    int placementSpace=placement.indexOf(' ');
+    if (placementSpace>=0) placement=placement.substring(0,placementSpace);
+    if (placement==CONFIG_KING_LIFT_FEN) {
+        lastGameErrorDisplay="";
+        return;
+    }
     String msg=differenceDisplay(correctionFenCandidate,lastFenSentToChessLink);
     if (!msg.length()) { if (lastGameErrorDisplay.length()) { lastGameErrorDisplay=""; cynusDisplay("play"); } return; }
     if (msg==lastGameErrorDisplay) return;
@@ -1334,15 +1783,26 @@ static void cynuslinkCoreLoop() {
     if (cynusConnectPending) { cynusConnectPending=false; if (!connectCynus()) { cynusDev=nullptr; delay(1000); startCynusScan(); } }
     if (clProcessPending) { clProcessPending=false; processCL(); }
     if (clStatusPending) { clStatusPending=false; sendStatus(); }
+    if (clFinalStatusPending && (int32_t)(millis() - clFinalStatusAt) >= 0) {
+        clFinalStatusPending = false;
+        if (clConnected && clNotify && boardSynced) sendStatus();
+    }
+    processFreeAnalysisTransition();
     processPendingLedMove();
     processSupervision();
+    processExperimentalBoardModes();
     if (btScanDisplayPending && cynusReady && !clConnected && state==WAIT_CHESSLINK && (int32_t)(millis()-btScanDisplayAt)>=0) {
         btScanDisplayPending=false;
         cynusDisplay("BT Scan");
         Serial.println("[DISPLAY] BT Scan: POS OK shown for 2 seconds, scanning for ChessLink");
         startChessLinkAdvertising();
     }
-    if (displayPlayPending && cynusReady && clConnected && (int32_t)(millis()-displayPlayAt)>=0) { displayPlayPending=false; cynusDisplay("play"); }
+    if (displayPlayPending && cynusReady && clConnected && (int32_t)(millis()-displayPlayAt)>=0) {
+        displayPlayPending=false;
+        if (experimentalBoardMode == EXP_MODE_FREE_ANALYSIS) cynusDisplay("Freemode");
+        else if (experimentalBoardMode == EXP_MODE_SET_POSITION) cynusDisplay("Set Pos");
+        else cynusDisplay("play");
+    }
     if (cynusEngineOffSecondSendPending && cynusReady && millis()-engineOffSentAt>=300) {
         cynusEngineOffSecondSendPending=false;
         if (sendCynus("set internal engine off\n")) { Serial.println("[CYNUS] internal engine OFF command #2 sent"); engineOffSentAt=millis(); }
@@ -1355,4 +1815,3 @@ static void cynuslinkCoreLoop() {
 
 void setup() { cynuslinkCoreSetup(); }
 void loop() { cynuslinkCoreLoop(); processStartOrientation(); }
-
