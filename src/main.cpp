@@ -1412,6 +1412,43 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                     bufferedFen=f;
                     Serial.printf("[BOARD] buffered FEN %s\n",bufferedFen.c_str());
 
+                    // A scan showing the pristine starting position, seen at ANY point
+                    // mid-game (not just while it happens to be the human's own turn),
+                    // means the human physically reset the pieces to begin a fresh game
+                    // -- most chess computers (including the user's own Mephisto
+                    // Phoenix) treat this as an abort/new-game signal regardless of
+                    // whose turn it currently is. Checked unconditionally here, ahead
+                    // of every turn-cycle-specific branch below.
+                    String midGameResetPlacement=bufferedFen;
+                    {
+                        int mgSp=midGameResetPlacement.indexOf(' ');
+                        if (mgSp>=0) midGameResetPlacement=midGameResetPlacement.substring(0,mgSp);
+                    }
+                    if (initialStartupComplete && state==RUNNING && clConnected &&
+                        (midGameResetPlacement==START_FEN || midGameResetPlacement==FLIPPED_START_FEN)) {
+                        const bool freshFlipOn = (midGameResetPlacement==FLIPPED_START_FEN);
+                        if (sendCynus(freshFlipOn ? "set flip board on\n" : "set flip board off\n")) {
+                            firstMoveFlipOn = freshFlipOn;
+                            firstMoveOrientationLocked = false;
+                            engineSide = ENGINE_SIDE_UNKNOWN;
+                            fenNow = bufferedFen;
+                            boardSynced = true;
+                            publishNextFenToChessLink = false;
+                            getMovePendingUntilChessLink = false;
+                            correctionFenCandidate = "";
+                            lastGameErrorDisplay = "";
+                            displayPlayPending = false;
+                            cynusDisplay("play");
+                            clStatusPending = true;
+                            setMoveCycle(WAIT_FIRST_MOVE);
+                            Serial.println("[BOARD] starting position detected mid-game; treating as New Game");
+                        } else {
+                            Serial.println("[BOARD] starting position detected mid-game, but set flip board "
+                                            "BLE write failed; ignoring this scan");
+                        }
+                        continue;
+                    }
+
                     if (state==SYNC_BOARD && cynusReady && boardSyncPurpose!=BOARD_SYNC_NONE) {
                         String placement=bufferedFen;
                         int sp=placement.indexOf(' ');
@@ -1534,6 +1571,14 @@ static void cynusBytes(const uint8_t* data, size_t len) {
                         fenNow=bufferedFen;
                         boardSynced=true;
                         setMoveCycle(WAIT_HUMAN_MOVE);
+                        // Force an immediate status push confirming the robot's own
+                        // completed move -- previously left to the passive auto-report
+                        // check (fenNow != lastFenSentToChessLink), which is not
+                        // guaranteed to fire before ChessLink needs to know. Without
+                        // this, BC has no confirmation its own move was physically
+                        // executed and its internal board model can diverge from
+                        // the real one.
+                        clStatusPending=true;
                         continue;
                     }
 

@@ -1,6 +1,6 @@
 {
   "name": "CynusLink",
-  "version": "v2.11",
+  "version": "v2.12 (fix: robot-move confirmation and mid-game New Game detection)",
   "new_install_prompt_erase": true,
   "builds": [
     {
